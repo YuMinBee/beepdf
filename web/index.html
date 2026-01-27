@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Audio Overview - AI Guide</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Google+Sans+Text:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Google Sans Text', sans-serif; background-color:#f8fafd; color:#1f1f1f; }
+    .google-sans { font-family: 'Google Sans', sans-serif; }
+  </style>
+</head>
+
+<body class="min-h-screen">
+  <div class="mx-auto max-w-3xl px-4 py-10">
+    <!-- Header -->
+    <div class="mb-8">
+      <h1 class="google-sans text-3xl font-semibold tracking-tight">Audio Overview</h1>
+      <p class="mt-2 text-sm text-gray-600">
+        PDF를 업로드하면 오디오를 만들어드려요. 
+      </p>
+    </div>
+
+    <!-- Card -->
+    <div class="rounded-2xl bg-white shadow-sm ring-1 ring-black/5 p-6">
+      <div class="flex flex-col gap-4">
+        <!-- File input -->
+        <div>
+          <label class="google-sans text-sm font-medium">PDF 업로드</label>
+          <div class="mt-2 flex items-center gap-3">
+            <input id="pdfFile" type="file" accept="application/pdf"
+              class="block w-full text-sm file:mr-4 file:rounded-xl file:border-0 file:bg-gray-100 file:px-4 file:py-2 file:text-sm file:font-medium file:text-gray-700 hover:file:bg-gray-200" />
+          </div>
+          <p class="mt-2 text-xs text-gray-500">
+            결과는 presigned URL로 제공됩니다(기본 15분 만료).
+          </p>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex flex-wrap items-center gap-3">
+          <button id="btnUseCache"
+            class="google-sans inline-flex items-center justify-center rounded-xl bg-black px-4 py-2 text-sm font-medium text-white hover:bg-gray-900 disabled:opacity-50 disabled:cursor-not-allowed">
+            이전 결과 불러오기
+          </button>
+
+          <button id="btnRegen"
+            class="google-sans inline-flex items-center justify-center rounded-xl bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed">
+            새로 만들기
+          </button>
+
+          <button id="btnReset"
+            class="google-sans inline-flex items-center justify-center rounded-xl bg-gray-100 px-4 py-2 text-sm font-medium text-gray-800 hover:bg-gray-200">
+            초기화
+          </button>
+
+          <div id="statusBadge"
+            class="hidden rounded-xl bg-gray-50 px-3 py-2 text-xs text-gray-700 ring-1 ring-black/5">
+            상태
+          </div>
+        </div>
+        
+
+	<p class="mt-2 text-xs text-gray-500">
+          같은 PDF라면 “이전 결과 불러오기”가 더 빨라요.
+        </p>
+        <!-- Progress -->
+        <div id="progressWrap" class="hidden">
+          <div class="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-100">
+            <div id="progressBar" class="h-2 w-1/3 rounded-full bg-black/80 animate-pulse"></div>
+          </div>
+          <p id="progressText" class="mt-2 text-xs text-gray-600">처리 중…</p>
+        </div>
+
+        <!-- Result -->
+        <div id="resultWrap" class="hidden border-t pt-5">
+          <h2 class="google-sans text-sm font-medium">결과</h2>
+
+          <div class="mt-3 rounded-xl bg-gray-50 p-4 ring-1 ring-black/5">
+            <div class="grid grid-cols-1 gap-2 text-xs text-gray-700">
+              <div><span class="font-medium">request_id:</span> <span id="reqId">-</span></div>
+              <div><span class="font-medium">cached:</span> <span id="cachedFlag">-</span></div>
+              <div><span class="font-medium">pages:</span> <span id="pages">-</span></div>
+              <div><span class="font-medium">elapsed_ms:</span> <span id="elapsed">-</span></div>
+              <div><span class="font-medium">expires_in_sec:</span> <span id="expires">-</span></div>
+            </div>
+
+            <div class="mt-4">
+              <audio id="audioPlayer" controls class="w-full"></audio>
+              <div class="mt-3 flex flex-wrap items-center gap-3">
+                <a id="downloadLink" href="#" download
+                  class="google-sans inline-flex items-center justify-center rounded-xl bg-white px-4 py-2 text-sm font-medium text-gray-900 ring-1 ring-black/10 hover:bg-gray-50">
+                  오디오 다운로드
+                </a>
+                <button id="btnCopyUrl"
+                  class="google-sans inline-flex items-center justify-center rounded-xl bg-white px-4 py-2 text-sm font-medium text-gray-900 ring-1 ring-black/10 hover:bg-gray-50">
+                  URL 복사
+                </button>
+              </div>
+
+              <!-- URL은 화면에는 숨김 -->
+              <p class="hidden"><span id="audioUrlText">-</span></p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Error -->
+        <div id="errorWrap" class="hidden border-t pt-5">
+          <h2 class="google-sans text-sm font-medium text-red-700">에러</h2>
+          <pre id="errorText" class="mt-3 whitespace-pre-wrap rounded-xl bg-red-50 p-4 text-xs text-red-800 ring-1 ring-red-200"></pre>
+        </div>
+      </div>
+    </div>
+
+    <p class="mt-6 text-xs text-gray-500"></p>
+  </div>
+
+  <script>
+    // 같은 도메인에서 nginx가 /v1/ 를 프록시하면 "" 유지
+    const API_BASE = "";
+
+    const $ = (id) => document.getElementById(id);
+
+    const pdfFile = $("pdfFile");
+    const btnUseCache = $("btnUseCache");
+    const btnRegen = $("btnRegen");
+    const btnReset = $("btnReset");
+
+    const statusBadge = $("statusBadge");
+    const progressWrap = $("progressWrap");
+    const progressText = $("progressText");
+
+    const resultWrap = $("resultWrap");
+    const errorWrap = $("errorWrap");
+    const errorText = $("errorText");
+
+    const reqId = $("reqId");
+    const cachedFlag = $("cachedFlag");
+    const pages = $("pages");
+    const elapsed = $("elapsed");
+    const expires = $("expires");
+
+    const audioPlayer = $("audioPlayer");
+    const downloadLink = $("downloadLink");
+    const btnCopyUrl = $("btnCopyUrl");
+
+    let audioUrl = "";
+
+    function setStatus(text) {
+      statusBadge.textContent = text;
+      statusBadge.classList.remove("hidden");
+    }
+
+    function showLoading(on) {
+      if (on) {
+        progressWrap.classList.remove("hidden");
+        btnUseCache.disabled = true;
+        btnRegen.disabled = true;
+        setStatus("처리 중");
+      } else {
+        progressWrap.classList.add("hidden");
+        btnUseCache.disabled = false;
+        btnRegen.disabled = false;
+      }
+    }
+
+    function clearUI() {
+      errorWrap.classList.add("hidden");
+      resultWrap.classList.add("hidden");
+      statusBadge.classList.add("hidden");
+
+      errorText.textContent = "";
+      reqId.textContent = "-";
+      cachedFlag.textContent = "-";
+      pages.textContent = "-";
+      elapsed.textContent = "-";
+      expires.textContent = "-";
+
+      audioUrl = "";
+      audioPlayer.src = "";
+      downloadLink.href = "#";
+    }
+
+    function ensureClientId() {
+      const existing = localStorage.getItem("client_id");
+      if (existing) return existing;
+      const id = crypto.randomUUID();
+      localStorage.setItem("client_id", id);
+      return id;
+    }
+
+    function normalizePages(data) {
+      // 백엔드가 total_pages/pages_processed 주는 형태에 맞춤
+      const tp = (data.total_pages ?? "-");
+      const pp = (data.pages_processed ?? "-");
+      const trunc = data.truncated ? " (truncated)" : "";
+      return `${pp}/${tp}${trunc}`;
+    }
+
+    async function callPodcast({ forceRegen = 0 } = {}) {
+      clearUI();
+
+      const f = pdfFile.files?.[0];
+      if (!f) {
+        errorWrap.classList.remove("hidden");
+        errorText.textContent = "PDF 파일을 선택해줘.";
+        setStatus("입력 필요");
+        return;
+      }
+
+      showLoading(true);
+      progressText.textContent = forceRegen
+        ? "새로 생성 중… (OCR/Studio/TTS)"
+        : "캐시 확인 후 처리 중…";
+
+      const clientId = ensureClientId();
+
+      try {
+        const form = new FormData();
+        form.append("file", f);
+
+        const url = `${API_BASE}/v1/podcast/pdf?force_regen=${forceRegen}`;
+
+        const resp = await fetch(url, {
+          method: "POST",
+          headers: { "X-Client-ID": clientId },
+          body: form,
+        });
+
+        const ct = resp.headers.get("content-type") || "";
+        let data;
+        if (ct.includes("application/json")) data = await resp.json();
+        else data = { raw: await resp.text() };
+
+        if (!resp.ok) throw new Error(JSON.stringify(data, null, 2));
+
+        audioUrl = data.audio_url ?? "";
+        if (!audioUrl) {
+          throw new Error("audio_url이 응답에 없어. 서버 응답을 확인해줘.\n" + JSON.stringify(data, null, 2));
+        }
+
+        resultWrap.classList.remove("hidden");
+        setStatus(data.cached ? "완료 (캐시)" : "완료 (신규)");
+
+        reqId.textContent = data.request_id ?? "-";
+        cachedFlag.textContent = String(!!data.cached);
+        pages.textContent = normalizePages(data);
+        elapsed.textContent = data.elapsed_ms ?? "-";
+        expires.textContent = data.expires_in_sec ?? "-";
+
+        audioPlayer.src = audioUrl;
+        downloadLink.href = audioUrl;
+
+      } catch (e) {
+        setStatus("실패");
+        errorWrap.classList.remove("hidden");
+        errorText.textContent = String(e?.message || e);
+      } finally {
+        showLoading(false);
+      }
+    }
+
+    btnUseCache.addEventListener("click", () => callPodcast({ forceRegen: 0 }));
+    btnRegen.addEventListener("click", () => callPodcast({ forceRegen: 1 }));
+
+    btnReset.addEventListener("click", () => {
+      pdfFile.value = "";
+      clearUI();
+      setStatus("대기");
+    });
+
+    btnCopyUrl.addEventListener("click", async () => {
+      const text = audioUrl || "";
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus("URL 복사됨");
+        setTimeout(() => setStatus("완료"), 1200);
+      } catch {
+        setStatus("복사 실패");
+      }
+    });
+
+    // 초기 상태
+    setStatus("대기");
+  </script>
+</body>
+</html>

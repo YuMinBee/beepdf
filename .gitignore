@@ -1,0 +1,11 @@
+.env
+app.env
+*.pem
+*.key
+__pycache__/
+*.pyc
+.venv/
+*.mp3
+*.log
+/tmp/
+output/

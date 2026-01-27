@@ -1,0 +1,20 @@
+● app.service - FastAPI (uvicorn) app
+     Loaded: loaded (/etc/systemd/system/app.service; enabled; vendor preset: enabled)
+     Active: active (running) since Tue 2026-01-27 15:50:42 KST; 33min ago
+   Main PID: 3673 (uvicorn)
+      Tasks: 7 (limit: 9388)
+     Memory: 60.2M
+        CPU: 2.765s
+     CGroup: /system.slice/app.service
+             └─3673 /opt/app/.venv/bin/python3 /opt/app/.venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips=10.0.2.6
+
+Jan 27 16:23:10 app-001 uvicorn[3673]: INFO:     10.0.3.8:46860 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:23:11 app-001 uvicorn[3673]: INFO:     10.0.4.7:31142 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:23:40 app-001 uvicorn[3673]: INFO:     10.0.4.8:32426 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:23:40 app-001 uvicorn[3673]: INFO:     10.0.3.7:31064 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:23:40 app-001 uvicorn[3673]: INFO:     10.0.3.8:57210 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:23:41 app-001 uvicorn[3673]: INFO:     10.0.4.7:50038 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:24:10 app-001 uvicorn[3673]: INFO:     10.0.4.8:60292 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:24:10 app-001 uvicorn[3673]: INFO:     10.0.3.7:58204 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:24:10 app-001 uvicorn[3673]: INFO:     10.0.3.8:37582 - "GET /health HTTP/1.1" 200 OK
+Jan 27 16:24:11 app-001 uvicorn[3673]: INFO:     10.0.4.7:59832 - "GET /health HTTP/1.1" 200 OK
