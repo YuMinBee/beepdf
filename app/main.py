@@ -50,7 +50,7 @@ def health():
     return {"status": "ok", "server": SERVER_NAME}
 
 @app.get("/v1/metrics/daily")
-async def metrics_daily(days: int = 7):
+def metrics_daily(days: int = 7):
     if days < 1 or days > 90:
         raise HTTPException(status_code=400, detail="days는 1~90 사이만 허용")
 
@@ -59,10 +59,46 @@ async def metrics_daily(days: int = 7):
         return {"days": days, "data": data}
     except Exception as e:
         # 에러를 숨기지 말고 바로 보이게
-        raise HTTPException(status_code=500, detail=f"metrics query failed: {e}")
+        raise HTTPException(status_code=500, detail=f"metrics query failed: {str(e)[:200]}")
 
+@app.get("/v1/requests/{request_id}")
+def get_request_status(request_id: str):
+    # DB 장애면 “없음(None)”이랑 구분해야 해서 여기선 safe_db 쓰지 말고 직접 try/catch
+    try:
+        req = db_get_request_row(request_id)
+        if not req:
+            raise HTTPException(status_code=404, detail="request_id not found")
 
+        steps = db_get_steps(request_id)
 
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"db unavailable: {str(e)[:200]}")
+
+    last_step = steps[-1]["step"] if steps else None
+    last_step_status = steps[-1]["status"] if steps else None
+
+    audio_url = None
+    key = req.get("result_audio_key")
+    if req.get("status") == "DONE" and key:
+        try:
+            audio_url = presign_only(key)
+        except Exception:
+            audio_url = None
+    return {
+        "request_id": req.get("request_id"),
+        "status": req.get("status"),
+        "error_message": req.get("error_message"),
+        "created_at": req.get("created_at"),
+        "input_hash": req.get("input_hash"),
+        "result_audio_key": req.get("result_audio_key"),
+        "current_step": last_step,
+        "current_step_status": last_step_status,
+        "steps": steps,
+        "audio_url": audio_url,
+        "server": SERVER_NAME,
+    }
 
 # =========================
 # DB Logging (MySQL)
@@ -219,19 +255,97 @@ def db_find_cached_audio_key(cache_key: str, pdf_hash: str) -> str | None:
         return row.get("result_audio_key")
     return row[0]
 
+def db_get_request_row(request_id: str) -> dict | None:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT request_id, status, error_message, input_hash, result_audio_key, created_at
+                FROM requests
+                WHERE request_id=%s
+                LIMIT 1
+                """,
+                (request_id,),
+            )
+            row = cur.fetchone()
+
+    if not row:
+        return None
+
+    if isinstance(row, dict):
+        return {
+            "request_id": row.get("request_id"),
+            "status": row.get("status"),
+            "error_message": row.get("error_message"),
+            "input_hash": row.get("input_hash"),
+            "result_audio_key": row.get("result_audio_key"),
+            "created_at": str(row.get("created_at")) if row.get("created_at") else None,
+        }
+
+    # tuple cursor 대응
+    return {
+        "request_id": row[0],
+        "status": row[1],
+        "error_message": row[2],
+        "input_hash": row[3],
+        "result_audio_key": row[4],
+        "created_at": str(row[5]) if row[5] else None,
+    }
+
+
+def db_get_steps(request_id: str, limit: int = 200) -> list[dict]:
+    with _db_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT step, status, latency_ms, message, error_message, created_at
+                FROM request_steps
+                WHERE request_id=%s
+                ORDER BY created_at ASC
+                LIMIT %s
+                """,
+                (request_id, limit),
+            )
+            rows = cur.fetchall() or []
+
+    out = []
+    for r in rows:
+        if isinstance(r, dict):
+            out.append({
+                "step": r.get("step"),
+                "status": r.get("status"),
+                "latency_ms": r.get("latency_ms"),
+                "message": r.get("message"),
+                "error_message": r.get("error_message"),
+                "created_at": str(r.get("created_at")) if r.get("created_at") else None,
+            })
+        else:
+            out.append({
+                "step": r[0],
+                "status": r[1],
+                "latency_ms": r[2],
+                "message": r[3],
+                "error_message": r[4],
+                "created_at": str(r[5]) if r[5] else None,
+            })
+    return out
 
 def db_insert_step(
     request_id: str,
     step: str,
     status: str,
     latency_ms: int | None = None,
+    message: str | None = None,
     error_message: str | None = None,
 ):
     with _db_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO request_steps(request_id, step, status, latency_ms, error_message) VALUES (%s,%s,%s,%s,%s)",
-                (request_id, step, status, latency_ms, error_message),
+                """
+                INSERT INTO request_steps(request_id, step, status, latency_ms, message, error_message)
+                VALUES (%s,%s,%s,%s,%s,%s)
+                """,
+                (request_id, step, status, latency_ms, message, error_message),
             )
 
 
@@ -1146,7 +1260,18 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
     ocr_timeout = int(os.getenv("OCR_TIMEOUT_SEC", "60"))
     studio_timeout = int(os.getenv("STUDIO_TIMEOUT_SEC", "60"))
     ocr_max_chars = int(os.getenv("OCR_TEXT_MAX_CHARS", "12000"))
-    tts_max_chars = int(os.getenv("TTS_TEXT_MAX_CHARS", "10000"))
+    tts_max_chars = int(os.getenv("TTS_TEXT_MAX_CHARS", "2000"))
+    # TTS용 텍스트 클립 (2000자 절대 초과 금지)
+    tts_text = (script or "").strip()
+
+    suffix = "\n...(중략)"
+    if len(tts_text) > tts_max_chars:
+        cut = tts_max_chars - len(suffix)
+        if cut < 0:
+            # suffix가 너무 길면 suffix 없이 그냥 자름
+            tts_text = tts_text[:tts_max_chars]
+        else:
+            tts_text = tts_text[:cut].rstrip() + suffix
 
     t0 = time.time()
     
@@ -1168,19 +1293,19 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
 
     if force_regen == 1:
         # 강제 재생성: 캐시를 "조회하지 않음" -> MISS 찍으면 안 됨
-        safe_db(db_insert_step, req_id, "CACHE", "SKIP", 0, "force_regen=1")
+        safe_db(db_insert_step, req_id, "CACHE", "SKIP", 0, message="force_regen=1")
     else:
         cached_key = safe_db(db_find_cached_audio_key, cache_key, pdf_hash)
 
         if cached_key:
-            safe_db(db_insert_step, req_id, "CACHE", "OK", 0, f"hit cache_key={cache_key} key={cached_key}")
+            safe_db(db_insert_step, req_id, "CACHE", "OK", 0, message=f"hit cache_key={cache_key} key={cached_key}")
             safe_db(db_set_result_audio_key, req_id, cached_key)
             safe_db(db_update_request, req_id, "DONE", None)
 
             audio_url = presign_only(cached_key)
             return {"request_id": req_id, "audio_url": audio_url, "cached": True}
         else:
-            safe_db(db_insert_step, req_id, "CACHE", "MISS", 0, f"miss cache_key={cache_key}")  
+            safe_db(db_insert_step, req_id, "CACHE", "MISS", 0, message=f"miss cache_key={cache_key}")  
       
 
     try:
@@ -1204,9 +1329,9 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
             )
             # method 정보를 OK 로그에 남겨서 "OCR인지 pdf_text인지"도 DB에서 확인 가능
             meta = f"method={info.get('method')} ocr_pages={info.get('ocr_pages')} pages={info.get('pages_processed')}/{info.get('total_pages')}"
-            safe_db(db_insert_step, req_id, "OCR", "OK", int((time.time() - s0) * 1000), meta[:1000])
+            safe_db(db_insert_step, req_id, "OCR", "OK", int((time.time() - s0) * 1000), message=meta[:1000])
         except Exception:
-            safe_db(db_insert_step, req_id, "OCR", "FAIL", int((time.time() - s0) * 1000), traceback.format_exc()[:800])
+            safe_db(db_insert_step, req_id, "OCR", "FAIL", int((time.time() - s0) * 1000), error_message=traceback.format_exc()[:800])
             raise
 
         # ===== STEP: STUDIO =====
@@ -1214,10 +1339,9 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
         try:
             script_req_id = f"{req_id}-script"
             script = call_clova_studio_script(info["source_text"], request_id=script_req_id, timeout_sec=studio_timeout)
-
-            safe_db(db_insert_step, req_id, "STUDIO", "OK", int((time.time() - s0) * 1000), "input=source_text")
+            safe_db(db_insert_step, req_id, "STUDIO", "OK", int((time.time() - s0) * 1000), message="input=source_text")
         except Exception:
-            safe_db(db_insert_step, req_id, "STUDIO", "FAIL", int((time.time() - s0) * 1000), traceback.format_exc()[:800])
+            safe_db(db_insert_step, req_id, "STUDIO", "FAIL", int((time.time() - s0) * 1000), error_message=traceback.format_exc()[:800])
             raise
 
         # TTS용 텍스트 클립
@@ -1247,10 +1371,9 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
                 data={"speaker": speaker, "speed": str(speed), "text": tts_text},
                 timeout=30,
                 )
-
-            safe_db(db_insert_step, req_id, "VOICE", "OK", int((time.time() - s0) * 1000), f"attempt={used_attempt}")
+            safe_db(db_insert_step, req_id, "VOICE", "OK", int((time.time() - s0) * 1000), message=f"attempt={used_attempt}")  
         except Exception:
-            safe_db(db_insert_step, req_id, "VOICE", "FAIL", int((time.time() - s0) * 1000), traceback.format_exc()[:800])
+            safe_db(db_insert_step, req_id, "VOICE", "FAIL", int((time.time() - s0) * 1000), error_message=traceback.format_exc()[:800])
             raise
 
         # 로컬 임시 저장(업로드용)
@@ -1266,10 +1389,10 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
         s0 = time.time()
         try:
             audio_url = upload_mp3_and_presign(str(out_path), object_key)
-            safe_db(db_insert_step, req_id, "STORE", "OK", int((time.time() - s0) * 1000), object_key[:1000])
+            safe_db(db_insert_step, req_id, "STORE", "OK", int((time.time() - s0) * 1000), message=object_key[:1000])
             safe_db(db_set_result_audio_key, req_id, object_key)
         except Exception:
-            safe_db(db_insert_step, req_id, "STORE", "FAIL", int((time.time() - s0) * 1000), traceback.format_exc()[:800])
+            safe_db(db_insert_step, req_id, "STORE", "FAIL", int((time.time() - s0) * 1000), error_message=traceback.format_exc()[:800])
             raise
         finally:
             #  로컬 파일 삭제 (디스크 누수 방지)
