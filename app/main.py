@@ -1262,17 +1262,9 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
     ocr_max_chars = int(os.getenv("OCR_TEXT_MAX_CHARS", "12000"))
     tts_max_chars = int(os.getenv("TTS_TEXT_MAX_CHARS", "2000"))
     # TTS용 텍스트 클립 (2000자 절대 초과 금지)
-    tts_text = (script or "").strip()
-
     suffix = "\n...(중략)"
-    if len(tts_text) > tts_max_chars:
-        cut = tts_max_chars - len(suffix)
-        if cut < 0:
-            # suffix가 너무 길면 suffix 없이 그냥 자름
-            tts_text = tts_text[:tts_max_chars]
-        else:
-            tts_text = tts_text[:cut].rstrip() + suffix
-
+    script = None
+    tts_text = "" 
     t0 = time.time()
     
     client_id, client_ip, ua = get_client_meta(request)
@@ -1345,9 +1337,19 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
             raise
 
         # TTS용 텍스트 클립
-        tts_text = (script or "").strip()
+        # Studio 결과 검증
+        if not script or not str(script).strip():
+            raise HTTPException(status_code=502, detail="Studio 결과가 비어있음(script empty)")
+
+        tts_text = str(script).strip()
+
+        # 2000자 제한 (suffix 포함해서도 2000 넘지 않게)
         if len(tts_text) > tts_max_chars:
-            tts_text = tts_text[:tts_max_chars] + "\n...(중략)"
+            cut = tts_max_chars - len(suffix)
+            if cut <= 0:
+                tts_text = tts_text[:tts_max_chars]
+            else:
+                tts_text = tts_text[:cut].rstrip() + suffix
 
         # TTS 호출 준비
         key_id = env("CLOVA_VOICE_CLIENT_ID")
