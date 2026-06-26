@@ -1,0 +1,14 @@
+# BeePDF v2 optional dependencies
+# Install only when running the real local pipeline.
+fastapi>=0.111
+pydantic>=2.7
+networkx>=3.2
+numpy>=1.26
+
+# Heavy or environment-dependent options:
+# pymupdf4llm
+# docling
+# sentence-transformers
+# faiss-cpu
+# chromadb
+# langgraph
