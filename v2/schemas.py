@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 
@@ -45,7 +45,7 @@ class AnswerWithSources:
     def to_dict(self) -> dict[str, Any]:
         return {
             "answer": self.answer,
-            "vector_sources": [source.__dict__ for source in self.vector_sources],
+            "vector_sources": [asdict(source) for source in self.vector_sources],
             "graph_context": [triple.as_list() for triple in self.graph_context],
         }
 
