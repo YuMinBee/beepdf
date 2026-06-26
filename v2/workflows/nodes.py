@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from v2.graph.graphrag_lite import build_relation_graph
 from v2.providers.base import DocumentParser, IndexProvider, LLMProvider, StorageProvider, TTSProvider
 from v2.rag.chunking import chunk_pages
@@ -85,7 +87,7 @@ def export_node(state: BeePDFState, storage_provider: StorageProvider) -> BeePDF
         state.outputs["chunks_path"] = storage_provider.save_json(
             state.doc_id,
             "chunks.json",
-            {"chunks": [chunk.__dict__ for chunk in state.chunks]},
+            {"chunks": [asdict(chunk) for chunk in state.chunks]},
         )
         if "answer" in state.outputs:
             state.outputs["answer_path"] = storage_provider.save_json(
