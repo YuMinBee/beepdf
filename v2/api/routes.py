@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 try:
     from fastapi import APIRouter
 except ImportError:  # Keeps the scaffold importable without FastAPI installed.
@@ -8,6 +10,11 @@ except ImportError:  # Keeps the scaffold importable without FastAPI installed.
 from v2.workflows.local_workflow import run_local_graphrag_demo
 
 router = APIRouter(prefix="/v2", tags=["v2"]) if APIRouter else None
+
+
+def _errors(state) -> list[dict]:
+    return [asdict(error) for error in state.errors]
+
 
 if router:
 
@@ -23,7 +30,7 @@ if router:
             "doc_id": state.doc_id,
             "answer": state.outputs.get("answer"),
             "citation_check": state.outputs.get("citation_check"),
-            "errors": [error.__dict__ for error in state.errors],
+            "errors": _errors(state),
         }
 
     @router.post("/graph/build")
@@ -33,7 +40,7 @@ if router:
             question=payload.get("question", "BeePDF graph context"),
             request_id=payload.get("request_id", "req_demo"),
         )
-        return {"graph_path": state.graph_path, "errors": [error.__dict__ for error in state.errors]}
+        return {"graph_path": state.graph_path, "errors": _errors(state)}
 
     @router.post("/graph/query")
     def query_graph(payload: dict) -> dict:
@@ -51,7 +58,7 @@ if router:
             question="summary",
             request_id=payload.get("request_id", "req_demo"),
         )
-        return {"doc_id": state.doc_id, "chunks": len(state.chunks), "errors": [error.__dict__ for error in state.errors]}
+        return {"doc_id": state.doc_id, "chunks": len(state.chunks), "errors": _errors(state)}
 
     @router.post("/concept-map")
     def concept_map(payload: dict) -> dict:
