@@ -6,6 +6,90 @@ PDF 문서를 업로드하면 텍스트 추출 또는 OCR, LLM 기반 대본 생
 
 BeePDF는 PDF의 특성에 따라 처리 경로를 자동으로 선택합니다. 텍스트 레이어가 있는 PDF는 로컬 텍스트 추출 경로를 우선 사용하고, 스캔 PDF처럼 추출 품질이 낮은 파일은 OCR로 폴백합니다. 이후 CLOVA Studio로 자연스러운 대본을 생성하고, CLOVA Voice로 MP3를 만든 뒤 Object Storage에 저장해 Presigned URL로 제공합니다.
 
+## v2 Upgrade Direction
+
+BeePDF v2는 기존 PDF 음성화 파이프라인을 source-grounded RAG, GraphRAG-lite, LangGraph-style workflow, cloud-ready provider 구조로 확장합니다.
+
+### Phase 1. Source-grounded RAG
+
+- PyMuPDF4LLM 또는 Docling으로 PDF를 page markdown으로 변환
+- `chunk_id`, `page_number`를 유지한 page chunk 생성
+- FAISS 또는 Chroma 기반 chunk 검색
+- 답변과 함께 source page citation 반환
+
+산출물:
+
+- `/v2/ask`
+- `/v2/summary`
+- `outputs/{doc_id}/chunks.json`
+- `outputs/{doc_id}/answer_with_sources.json`
+
+### Phase 2. LangGraph-style Workflow
+
+기존 순차 처리 코드를 node 단위로 분리하고, mode별 workflow를 구성합니다.
+
+- `summary_mode`
+- `qa_mode`
+- `study_kit_mode`
+- `audio_script_mode`
+- `graphrag_mode`
+
+주요 노드:
+
+- `parse_pdf_node`
+- `ocr_fallback_node`
+- `chunk_node`
+- `vector_index_node`
+- `graph_index_node`
+- `rag_answer_node`
+- `graphrag_answer_node`
+- `script_generation_node`
+- `citation_check_node`
+- `export_node`
+
+### Phase 3. GraphRAG-lite
+
+처음부터 Microsoft GraphRAG 전체 구조로 가지 않고, PDF 관계 분석에 필요한 lite 구조를 적용합니다.
+
+```text
+chunk
+→ entity extraction
+→ relation extraction
+→ NetworkX graph
+→ entity neighbor retrieval
+→ vector result + graph context
+```
+
+예시 출력:
+
+```json
+{
+  "answer": "BeePDF의 비용 절감은 OCR 호출 최소화와 sha256 캐시를 중심으로 설계됩니다.",
+  "vector_sources": [
+    {"page": 3, "chunk_id": "p3_c2"}
+  ],
+  "graph_context": [
+    ["sha256 cache", "reduces", "repeated processing cost"],
+    ["OCR fallback", "handles", "scanned PDFs"]
+  ]
+}
+```
+
+### Phase 4. Study Kit & Audio Script
+
+- 요약
+- 용어집
+- 퀴즈
+- 예상 질문
+- 발표 대본
+- 1분, 3분, 5분 음성 대본
+
+### Phase 5. Cloud-ready Design
+
+v2는 비용 문제로 로컬 실행을 기본값으로 두었지만, Storage/LLM/TTS/Index 계층을 provider interface로 분리하여 클라우드 Object Storage, 외부 LLM API, managed vector DB로 교체 가능한 cloud-ready 구조로 설계했습니다.
+
+자세한 설계는 `docs/ARCHITECTURE.md`, `docs/WORKFLOW.md`, `docs/PROVIDERS.md`, `docs/GRAPH_RAG.md`, `docs/CLOUD_READY_PLAN.md`, `docs/EVALUATION.md`에 정리했습니다.
+
 ## 과업지시서 기반 아키텍처
 
 ![과업지시서 기반 NCP 아키텍처](docs/images/task-order-architecture.jpg)
