@@ -1,11 +1,8 @@
-.env
-app.env
-*.pem
-*.key
 __pycache__/
-*.pyc
+*.py[cod]
+outputs/
+.tmp-tests/
+.env
 .venv/
-*.mp3
-*.log
-/tmp/
-output/
+venv/
+_backups/

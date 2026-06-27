@@ -28,8 +28,8 @@ class LLMProvider(Protocol):
 
 
 class TTSProvider(Protocol):
-    def synthesize(self, doc_id: str, script: str) -> str:
-        """Generate audio and return a local path or remote URL."""
+    def synthesize(self, doc_id: str, script: str) -> str | None:
+        """Generate audio and return a local path, remote URL, or None for mock TTS."""
 
 
 class IndexProvider(Protocol):
@@ -40,6 +40,14 @@ class IndexProvider(Protocol):
         """Return relevant chunks while preserving page and chunk metadata."""
 
 
-class DocumentParser(Protocol):
-    def parse(self, pdf_path: str) -> list[PageMarkdown]:
-        """Parse a PDF into page-level markdown."""
+class ParserProvider(Protocol):
+    def parse(self, path: str) -> list[PageMarkdown]:
+        """Parse a local document into page-level markdown."""
+
+
+class OCRProvider(Protocol):
+    def extract_pages(self, pdf_path: str, warnings: list[str] | None = None) -> list[PageMarkdown]:
+        """Extract page text from a scanned PDF or image-only PDF."""
+
+
+DocumentParser = ParserProvider

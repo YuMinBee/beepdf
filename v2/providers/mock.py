@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from v2.providers.base import DocumentParser
+from v2.providers.base import ParserProvider
+from v2.rag.retrieval import chunks_from_contexts, retrieve_contexts
 from v2.schemas import AnswerWithSources, Chunk, PageMarkdown, RelationTriple, VectorSource
 
 
@@ -24,7 +25,7 @@ class LocalStorageProvider:
         return str(path)
 
 
-class MockDocumentParser(DocumentParser):
+class MockDocumentParser(ParserProvider):
     def parse(self, pdf_path: str) -> list[PageMarkdown]:
         return [
             PageMarkdown(
@@ -41,15 +42,18 @@ class MockDocumentParser(DocumentParser):
 
 class MockLLMProvider:
     def summarize(self, chunks: list[Chunk]) -> str:
-        return "BeePDF는 PDF 처리 비용 절감, 장애 추적, 근거 기반 질의응답을 목표로 합니다."
+        return "BeePDF focuses on cost reduction, failure tracking, and source-grounded Q&A."
 
     def answer(self, question: str, chunks: list[Chunk], graph_context: list[RelationTriple]) -> AnswerWithSources:
-        sources = [VectorSource(page=chunk.page_number, chunk_id=chunk.chunk_id) for chunk in chunks]
-        return AnswerWithSources(
-            answer="BeePDF의 비용 절감은 OCR 호출 최소화와 sha256 캐시를 중심으로 설계됩니다.",
-            vector_sources=sources,
-            graph_context=graph_context,
-        )
+        if not chunks:
+            return AnswerWithSources(answer="")
+        sources = [
+            VectorSource(page=chunk.page, chunk_id=chunk.chunk_id, score=chunk.metadata.get("retrieval_score"))
+            for chunk in chunks
+        ]
+        evidence = " ".join(chunk.text for chunk in chunks)
+        answer = f"Based on the retrieved document context: {evidence[:300]}"
+        return AnswerWithSources(answer=answer, vector_sources=sources, graph_context=graph_context)
 
     def extract_relations(self, chunks: list[Chunk]) -> list[RelationTriple]:
         return [
@@ -59,12 +63,12 @@ class MockLLMProvider:
         ]
 
     def generate_script(self, chunks: list[Chunk], minutes: int) -> str:
-        return f"BeePDF v2 발표 대본입니다. 목표 길이는 {minutes}분입니다."
+        return f"BeePDF v2 presentation script. Target length: {minutes} minutes."
 
 
 class MockTTSProvider:
-    def synthesize(self, doc_id: str, script: str) -> str:
-        return f"outputs/{doc_id}/mock-audio.mp3"
+    def synthesize(self, doc_id: str, script: str) -> None:
+        return None
 
 
 class MockIndexProvider:
@@ -72,11 +76,8 @@ class MockIndexProvider:
         return f"outputs/{doc_id}/vector_index.json"
 
     def search(self, question: str, chunks: list[Chunk], top_k: int = 4) -> list[Chunk]:
-        terms = {term.lower() for term in question.split() if len(term) > 1}
-        scored = []
-        for chunk in chunks:
-            text = chunk.text.lower()
-            score = sum(1 for term in terms if term in text)
-            scored.append((score, chunk))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return [chunk for score, chunk in scored[:top_k] if score > 0] or chunks[:top_k]
+        result = retrieve_contexts(question, chunks, top_k=top_k)
+        return chunks_from_contexts(result.contexts)
+
+
+

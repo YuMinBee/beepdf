@@ -14,9 +14,69 @@ class PageMarkdown:
 @dataclass(slots=True)
 class Chunk:
     chunk_id: str
-    page_number: int
+    page: int
     text: str
+    char_start: int
+    char_end: int
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def page_number(self) -> int:
+        return self.page
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class SourceRef:
+    page: int
+    chunk_id: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class RetrievalContext:
+    chunk_id: str
+    page: int
+    score: float
+    text: str
+    char_start: int | None = None
+    char_end: int | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class RetrievalResult:
+    query: str
+    top_k: int
+    contexts: list[RetrievalContext] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "query": self.query,
+            "top_k": self.top_k,
+            "contexts": [context.to_dict() for context in self.contexts],
+        }
+
+
+@dataclass(slots=True)
+class SourceGroundedAnswer:
+    answer: str
+    sources: list[SourceRef] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "answer": self.answer,
+            "sources": [source.to_dict() for source in self.sources],
+            "warnings": self.warnings,
+        }
 
 
 @dataclass(slots=True)
@@ -57,3 +117,16 @@ class WorkflowError:
     error_type: str
     message: str
     retryable: bool = False
+
+
+@dataclass(slots=True)
+class DocumentIngestResult:
+    doc_id: str
+    filename: str
+    page_count: int
+    chunk_count: int
+    output_dir: str
+    warnings: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)

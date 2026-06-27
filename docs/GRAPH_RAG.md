@@ -6,20 +6,20 @@ BeePDF v2 uses GraphRAG-lite to capture practical relationships inside a PDF wit
 
 ```text
 chunk
-→ entity extraction
-→ relation extraction
-→ NetworkX graph
-→ entity neighbor retrieval
-→ vector result + graph context
+-> entity extraction
+-> relation extraction
+-> NetworkX graph
+-> entity neighbor retrieval
+-> vector result + graph context
 ```
 
 ## Example Relations
 
 ```text
-sha256 cache → reduces → repeated processing cost
-request_id → enables → failure tracking
-OCR fallback → handles → scanned PDFs
-Object Storage → stores → generated MP3
+sha256 cache -> reduces -> repeated processing cost
+request_id -> enables -> failure tracking
+OCR fallback -> handles -> scanned PDFs
+Object Storage -> stores -> generated MP3
 ```
 
 ## Query Output

@@ -3,20 +3,31 @@ from __future__ import annotations
 from v2.schemas import Chunk, PageMarkdown
 
 
-def chunk_pages(pages: list[PageMarkdown], max_chars: int = 900) -> list[Chunk]:
+def chunk_pages(pages: list[PageMarkdown], max_chars: int = 900, filename: str | None = None) -> list[Chunk]:
     chunks: list[Chunk] = []
     for page in pages:
-        text = page.markdown.strip()
-        if not text:
+        text = page.markdown
+        if not text.strip():
             continue
-        parts = [text[index : index + max_chars] for index in range(0, len(text), max_chars)]
-        for offset, part in enumerate(parts, start=1):
+
+        chunk_index = 1
+        for start in range(0, len(text), max_chars):
+            raw_part = text[start : start + max_chars]
+            if not raw_part.strip():
+                continue
+            end = start + len(raw_part)
+            metadata = {"parser": page.parser}
+            if filename:
+                metadata["filename"] = filename
             chunks.append(
                 Chunk(
-                    chunk_id=f"p{page.page_number}_c{offset}",
-                    page_number=page.page_number,
-                    text=part,
-                    metadata={"parser": page.parser},
+                    chunk_id=f"p{page.page_number}_c{chunk_index}",
+                    page=page.page_number,
+                    text=raw_part.strip(),
+                    char_start=start,
+                    char_end=end,
+                    metadata=metadata,
                 )
             )
+            chunk_index += 1
     return chunks

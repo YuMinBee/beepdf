@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict
 
-from v2.graph.graphrag_lite import build_relation_graph
-from v2.providers.base import DocumentParser, IndexProvider, LLMProvider, StorageProvider, TTSProvider
+from v2.graph.concept_map import build_concept_map
+from v2.providers.base import DocumentParser, IndexProvider, LLMProvider, StorageProvider
 from v2.rag.chunking import chunk_pages
 from v2.rag.vector_rag import answer_with_sources
 from v2.workflows.state import BeePDFState
@@ -40,10 +40,10 @@ def vector_index_node(state: BeePDFState, index_provider: IndexProvider) -> BeeP
 
 def graph_index_node(state: BeePDFState, llm_provider: LLMProvider, storage_provider: StorageProvider) -> BeePDFState:
     try:
-        triples = llm_provider.extract_relations(state.chunks)
-        graph = build_relation_graph(triples)
-        state.graph_path = storage_provider.save_json(state.doc_id, "graph.json", graph.to_dict())
-        state.outputs["graph_context"] = triples
+        graph = build_concept_map(state.chunks)
+        state.graph_path = storage_provider.save_json(state.doc_id, "graph.json", graph)
+        state.outputs["concept_map"] = graph
+        state.outputs["graph_context"] = []
     except Exception as error:  # pragma: no cover - boundary node
         state.add_error("graph_index_node", error, retryable=True)
     return state
@@ -98,3 +98,4 @@ def export_node(state: BeePDFState, storage_provider: StorageProvider) -> BeePDF
     except Exception as error:  # pragma: no cover - boundary node
         state.add_error("export_node", error, retryable=True)
     return state
+
