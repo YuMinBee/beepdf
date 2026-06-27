@@ -8,7 +8,7 @@ BeePDF v2 upgrades the original PDF-to-audio pipeline into a runnable local Docu
 
 | Area | Added technology | Why it was added |
 | --- | --- | --- |
-| API | FastAPI entrypoint in `app/main.py` | Makes the demo executable through `/docs` instead of remaining as isolated functions. |
+| API | FastAPI v2 demo entrypoint in `app/v2_main.py` | Makes the demo executable through `/docs` instead of remaining as isolated functions. |
 | Parsing | PyMuPDF-based local PDF parsing | Extracts text-layer PDFs locally without paid APIs. |
 | OCR fallback | Tesseract via `LocalTesseractOCRProvider` | Handles image-only/scanned PDFs in a free local demo path. It remains replaceable by cloud OCR later. |
 | Chunking | Page-level chunk schema | Preserves `page`, `chunk_id`, and char offsets so every answer can cite its source. |
@@ -83,3 +83,4 @@ Manual checks performed:
 - TTS is mock and returns `audio_path: null`.
 - GraphRAG-lite uses heuristics, not LLM-based entity/relation extraction.
 - Korean OCR quality depends on installed Tesseract language data.
+

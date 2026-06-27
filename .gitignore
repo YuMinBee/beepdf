@@ -6,3 +6,5 @@ outputs/
 .venv/
 venv/
 _backups/
+*.log
+

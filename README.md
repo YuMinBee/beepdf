@@ -42,7 +42,7 @@ pip install -r requirements-v2.txt
 Start the local API:
 
 ```bash
-uvicorn app.main:app --reload --port 8000
+uvicorn app.v2_main:app --reload --port 8000
 ```
 
 Open the interactive docs:
@@ -51,7 +51,7 @@ Open the interactive docs:
 http://127.0.0.1:8000/docs
 ```
 
-The `/docs` page should show `/health`, `/v2/documents/ingest`, `/v2/ask`, `/v2/study-kit`, `/v2/audio-script`, and `/v2/concept-map`.
+The v2 demo entrypoint is separated as `app/v2_main.py` so the existing legacy `app/main.py` can stay intact. The `/docs` page should show `/health`, `/v2/documents/ingest`, `/v2/ask`, `/v2/study-kit`, `/v2/audio-script`, and `/v2/concept-map`.
 
 ## Sample Curl
 
@@ -140,5 +140,6 @@ The concept map is heuristic in the local demo. It creates nodes and edges from 
 ```bash
 python -m unittest discover -s tests
 ```
+
 
 
