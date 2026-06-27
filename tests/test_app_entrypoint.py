@@ -6,7 +6,7 @@ import unittest
 class FastAPIEntrypointTest(unittest.TestCase):
     def test_app_entrypoint_imports_when_fastapi_is_installed(self) -> None:
         try:
-            from app.v2_main import app
+            from v2.main import app
         except ModuleNotFoundError as exc:
             if exc.name == "fastapi":
                 self.skipTest("fastapi is not installed in this local environment")
@@ -24,5 +24,6 @@ class FastAPIEntrypointTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

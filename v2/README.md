@@ -118,3 +118,4 @@ Compatibility aliases remain for `/v2/ingest`, `/v2/retrieve`, and `/v2/answer`.
 
 The scaffold does not run embedding models or paid LLM APIs by default. It is safe to inspect and extend on a small local machine while GPU workloads are running elsewhere.
 
+

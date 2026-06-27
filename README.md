@@ -1,25 +1,52 @@
 # BeePDF
 
-BeePDF v2는 PDF 문서를 page-level RAG와 GraphRAG-lite로 구조화하고, 요약·Q&A·Study Kit·음성 대본 생성을 source-grounded 방식으로 제공하는 cloud-ready Document AI 플랫폼입니다. 현재 버전은 비용 없이 재현 가능한 local provider를 기본값으로 사용하지만, Storage/LLM/TTS/Index 계층을 provider interface로 분리하여 향후 클라우드 Object Storage, 외부 LLM API, managed vector DB로 교체할 수 있게 설계했습니다.
+BeePDF는 두 단계로 발전한 PDF 기반 학습/음성화 프로젝트입니다.
 
-## BeePDF v2 Goal
+- **v1 Legacy PDF-to-Audio**: PDF 1개를 업로드하면 텍스트 추출/OCR, CLOVA Studio 대본 생성, CLOVA Voice TTS, Object Storage 배포까지 처리하는 클라우드 지향 음성화 파이프라인입니다.
+- **v2 Course Pack Document AI**: 여러 강의자료를 하나의 Course Pack으로 묶고, source-grounded RAG와 GraphRAG-lite concept map을 통해 통합 Q&A, Study Kit, Audio Script를 생성하는 로컬 우선 학습 AI 데모입니다.
 
-BeePDF v2 turns local `.pdf`, `.txt`, and `.md` documents into page-level chunks, retrieves source chunks for a question, and generates grounded outputs that keep page citations. The local demo avoids paid APIs, embedding models, and GPU workloads.
+현재 메인 방향은 **v2 Course Pack 기반 멀티문서 학습 AI**입니다. GraphRAG-lite는 메인 제품명이 아니라, 여러 강의자료의 개념 연결과 concept map을 보조하는 기술로 사용합니다.
 
-## Local-first But Cloud-ready
+## Version Map
 
-The default providers are local or mock implementations:
+| Version | Purpose | Main files | Run target |
+| --- | --- | --- | --- |
+| v1 Legacy | PDF -> script -> TTS -> Object Storage | `app/main.py`, `db/`, `infra/`, `web/` | `uvicorn app.main:app` |
+| v2 Local Demo | Course Pack RAG, Study Kit, Audio Script, Concept Map | `v2/`, `v2/main.py`, `requirements-v2.txt`, `tests/` | `uvicorn v2.main:app --reload --port 8000` |
 
-| Interface | Local demo | Future replacement |
-| --- | --- | --- |
-| `StorageProvider` | `LocalStorageProvider` | Object Storage provider |
-| `ParserProvider` | `LocalParserProvider` | Managed parser/OCR worker |
-| `LLMProvider` | `MockLLMProvider` | ClovaStudioProvider, OpenAIProvider, OllamaProvider |
-| `TTSProvider` | `MockTTSProvider` | ClovaVoiceProvider, LocalTTSProvider |
-| `IndexProvider` | `LocalIndexProvider` / `SimpleRetriever` | ManagedVectorDBProvider |
-| Workflow | In-process functions | Queue-based worker execution |
+## Repository Structure
 
-## v2 Endpoints
+```text
+app/                  v1 legacy FastAPI service
+  main.py             v1 cloud PDF-to-audio entrypoint
+v2/                   v2 local Course Pack Document AI package
+  main.py             v2 FastAPI demo entrypoint
+  api/                v2 request/response routes
+  rag/                page-level retrieval and source-grounded answers
+  graph/              GraphRAG-lite concept map helpers
+  providers/          local/mock/cloud-ready provider interfaces
+  workflows/          LangGraph-style local workflow nodes
+docs/                 architecture and version documents
+tests/                current v2 local tests
+requirements-v2.txt   v2 local demo dependencies
+```
+
+More detail: [docs/REPOSITORY_STRUCTURE.md](docs/REPOSITORY_STRUCTURE.md)
+
+## Run v2 Local Demo
+
+```bash
+pip install -r requirements-v2.txt
+uvicorn v2.main:app --reload --port 8000
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Expected v2 endpoints:
 
 - `POST /v2/documents/ingest`
 - `GET /v2/documents/{doc_id}`
@@ -28,52 +55,13 @@ The default providers are local or mock implementations:
 - `POST /v2/audio-script`
 - `POST /v2/concept-map`
 
-Compatibility aliases also exist for `/v2/ingest`, `/v2/retrieve`, and `/v2/answer`.
+## v2 Positioning
 
+BeePDF v2는 PDF 문서를 page-level RAG와 GraphRAG-lite로 구조화하고, 요약, Q&A, Study Kit, 음성 대본 생성을 source-grounded 방식으로 제공하는 cloud-ready Document AI 플랫폼입니다.
 
-## Run The Local API
+기본 구현은 비용 없이 재현 가능한 local provider를 사용합니다. 다만 `StorageProvider`, `ParserProvider`, `OCRProvider`, `LLMProvider`, `TTSProvider`, `IndexProvider`를 분리해 향후 Object Storage, managed OCR, 외부 LLM API, managed vector DB로 교체할 수 있게 설계했습니다.
 
-Install the lightweight API dependencies when you want to run the FastAPI demo:
-
-```bash
-pip install -r requirements-v2.txt
-```
-
-Start the local API:
-
-```bash
-uvicorn app.v2_main:app --reload --port 8000
-```
-
-Open the interactive docs:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
-The v2 demo entrypoint is separated as `app/v2_main.py` so the existing legacy `app/main.py` can stay intact. The `/docs` page should show `/health`, `/v2/documents/ingest`, `/v2/ask`, `/v2/study-kit`, `/v2/audio-script`, and `/v2/concept-map`.
-
-## Sample Curl
-
-```bash
-curl -X POST http://localhost:8000/v2/documents/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"path":"samples/beepdf.md","output_root":"outputs"}'
-```
-
-```bash
-curl -X POST http://localhost:8000/v2/ask \
-  -H "Content-Type: application/json" \
-  -d '{"doc_id":"<doc_id>","question":"What is the core idea?","top_k":4}'
-```
-
-```bash
-curl -X POST http://localhost:8000/v2/audio-script \
-  -H "Content-Type: application/json" \
-  -d '{"doc_id":"<doc_id>","query":"PDF parsing","mode":"briefing_3min"}'
-```
-
-## Output Artifacts
+## v2 Output Artifacts
 
 ```text
 outputs/{doc_id}/
@@ -86,60 +74,21 @@ outputs/{doc_id}/
 - audio_script.json
 ```
 
-`chunks.json` keeps `page`, `chunk_id`, `char_start`, `char_end`, and filename metadata so every generated result can cite its source.
+## Docs
 
+- [v1 Legacy Overview](docs/V1_LEGACY.md)
+- [v2 Upgrade Summary](docs/V2_UPGRADE_SUMMARY.md)
+- [Repository Structure](docs/REPOSITORY_STRUCTURE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Providers](docs/PROVIDERS.md)
+- [GraphRAG-lite](docs/GRAPH_RAG.md)
+- [Cloud-ready Plan](docs/CLOUD_READY_PLAN.md)
+- [Evaluation](docs/EVALUATION.md)
 
-## OCR Fallback
-
-BeePDF v2 now has a working local OCR fallback path for scanned or image-only PDFs:
-
-```text
-PDF text extraction
--> text layer is empty or too short
--> LocalTesseractOCRProvider
--> page markdown
--> chunks.json
--> source-grounded ask/study-kit/audio-script/concept-map
-```
-
-The local demo uses Tesseract OCR as an optional CPU-based provider. `MockOCRProvider` keeps tests deterministic, while `LocalTesseractOCRProvider` can run a real OCR test when the OS-level Tesseract engine is installed.
-
-Windows install example:
-
-```bash
-winget install --id tesseract-ocr.tesseract -e
-pip install pytesseract PyMuPDF
-```
-
-This does not lock the service into Tesseract. The same `OCRProvider` interface can later be implemented by CLOVA OCR or another managed OCR service.
-
-## Why Source Citation Matters
-
-Document AI should not answer from memory when the user asks about a specific PDF. BeePDF v2 returns sources from retrieved chunks only. If no relevant context is found, `/v2/ask` returns an empty answer with a warning instead of inventing unsupported text.
-
-## When GraphRAG-lite Helps
-
-GraphRAG-lite is useful for relationship questions such as:
-
-- How does OCR support PDF parsing?
-- What enables failure tracking?
-- What reduces repeated processing cost?
-
-The concept map is heuristic in the local demo. It creates nodes and edges from chunk text and attaches evidence to every edge.
-
-## Current Limits
-
-- No paid LLM API calls
-- No high-quality TTS generation
-- No embedding model or FAISS execution by default
-- PDF parsing depends on optional `pymupdf4llm` or `PyMuPDF`
-- GraphRAG-lite uses simple heuristics, not LLM-based entity extraction
-
-## Local Tests
+## Tests
 
 ```bash
 python -m unittest discover -s tests
 ```
 
-
-
+The current test suite focuses on v2 local demo behavior: ingest, chunk source preservation, source-grounded ask, Study Kit, Audio Script, concept map, OCR fallback, provider interfaces, and FastAPI route registration.
