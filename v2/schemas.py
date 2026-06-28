@@ -34,6 +34,8 @@ class SourceRef:
     chunk_id: str
     doc_id: str | None = None
     filename: str | None = None
+    week: int | None = None
+    lecture_no: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {key: value for key, value in asdict(self).items() if value is not None}
@@ -87,6 +89,8 @@ class VectorSource:
     chunk_id: str
     doc_id: str | None = None
     filename: str | None = None
+    week: int | None = None
+    lecture_no: int | None = None
     score: float | None = None
 
 

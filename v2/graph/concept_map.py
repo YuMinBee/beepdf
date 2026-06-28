@@ -21,6 +21,13 @@ KNOWN_CONCEPTS = [
     "page",
     "TTS",
     "Object Storage",
+    "BPE",
+    "OOV",
+    "Tokenizer",
+    "subword",
+    "RNN",
+    "LSTM",
+    "CNN",
 ]
 
 RELATION_HINTS = {
@@ -32,6 +39,11 @@ RELATION_HINTS = {
     "chunk": ("source citation", "preserves"),
     "page": ("source citation", "anchors"),
     "TTS": ("audio script", "renders"),
+    "BPE": ("OOV", "reduces"),
+    "Tokenizer": ("BPE", "uses"),
+    "subword": ("OOV", "reduces"),
+    "LSTM": ("RNN", "extends"),
+    "CNN": ("text classification", "supports"),
 }
 
 

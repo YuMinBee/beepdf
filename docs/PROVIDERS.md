@@ -68,6 +68,7 @@ Local demo:
 
 - `MockLLMProvider`
 - `OpenAIProvider` when `OPENAI_API_KEY` is configured
+- `OllamaProvider` for local LLM script generation, defaulting to `gemma2:2b` and accepting `qwen3:8b` later
 
 Future replacements:
 
@@ -81,6 +82,7 @@ Responsibilities:
 - Answer questions with context.
 - Extract entities and relations.
 - Generate study kits and audio scripts.
+- For Course Pack audio scripts, `llm_provider: "ollama"` can call a local model and fall back to rule output if Ollama is unavailable.
 
 ## TTSProvider
 

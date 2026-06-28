@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 from v2.schemas import Chunk, PageMarkdown
+from v2.source_metadata import lecture_metadata_from_filename
 
 
 def chunk_pages(
@@ -26,6 +27,7 @@ def chunk_pages(
                 metadata["doc_id"] = doc_id
             if filename:
                 metadata["filename"] = filename
+                metadata.update(lecture_metadata_from_filename(filename))
             chunks.append(
                 Chunk(
                     chunk_id=f"p{page.page_number}_c{chunk_index}",

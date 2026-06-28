@@ -5,7 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-AudioMode = Literal["brief_1min", "briefing_3min", "lecture", "podcast"]
+AudioMode = Literal["brief_1min", "briefing_3min", "briefing_5min", "lecture", "podcast"]
 
 
 class ChunkModel(BaseModel):
@@ -17,6 +17,8 @@ class ChunkModel(BaseModel):
     doc_id: str | None = None
     filename: str | None = None
     pack_id: str | None = None
+    week: int | None = None
+    lecture_no: int | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -48,6 +50,9 @@ class QueryRequest(BaseModel):
 class AnswerResponse(BaseModel):
     answer: str
     sources: list[dict[str, Any]] = Field(default_factory=list)
+    mode: str | None = None
+    retrieval_mode: str | None = None
+    graph_context: list[dict[str, Any]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -57,6 +62,12 @@ class StudyKitRequest(QueryRequest):
 
 class AudioScriptRequest(QueryRequest):
     mode: AudioMode = "briefing_3min"
+    llm_provider: str = "mock"
+    llm_model: str | None = None
+    grounding: str = "creative"
+    target_minutes: int | None = None
+    target_chars: int | None = None
+    knowledge_scope: str = "course_pack"
 
 
 class AudioScriptResponse(BaseModel):
@@ -64,6 +75,7 @@ class AudioScriptResponse(BaseModel):
     script: list[dict[str, Any]] = Field(default_factory=list)
     tts_status: str = "mock"
     audio_path: str | None = None
+    llm: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 
@@ -99,6 +111,7 @@ class CoursePackQueryRequest(BaseModel):
     query: str | None = None
     top_k: int = 4
     output_root: str = "outputs"
+    mode: str = "vector"
 
 
 class CoursePackStudyKitRequest(CoursePackQueryRequest):
@@ -126,6 +139,12 @@ class CoursePackSummaryResponse(BaseModel):
 
 class CoursePackAudioScriptRequest(CoursePackQueryRequest):
     mode: AudioMode = "briefing_3min"
+    llm_provider: str = "mock"
+    llm_model: str | None = None
+    grounding: str = "creative"
+    target_minutes: int | None = None
+    target_chars: int | None = None
+    knowledge_scope: str = "course_pack"
 
 
 class CoursePackArtifactsResponse(BaseModel):

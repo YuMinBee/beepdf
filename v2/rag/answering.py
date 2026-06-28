@@ -117,10 +117,21 @@ def _sources_from_chunks(chunks: list[Chunk]) -> list[SourceRef]:
     for chunk in chunks:
         doc_id = chunk.metadata.get("doc_id") if chunk.metadata else None
         filename = chunk.metadata.get("filename") if chunk.metadata else None
+        week = chunk.metadata.get("week") if chunk.metadata else None
+        lecture_no = chunk.metadata.get("lecture_no") if chunk.metadata else None
         key = (doc_id, filename, chunk.page, chunk.chunk_id)
         if key in seen:
             continue
-        sources.append(SourceRef(page=chunk.page, chunk_id=chunk.chunk_id, doc_id=doc_id, filename=filename))
+        sources.append(
+            SourceRef(
+                page=chunk.page,
+                chunk_id=chunk.chunk_id,
+                doc_id=doc_id,
+                filename=filename,
+                week=week,
+                lecture_no=lecture_no,
+            )
+        )
         seen.add(key)
     return sources
 

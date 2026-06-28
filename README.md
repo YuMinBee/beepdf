@@ -109,6 +109,7 @@ Course Pack sources include `doc_id`, `filename`, `page`, and `chunk_id` so answ
 
 ## Docs
 
+- [v2 Static Endpoint Viewer](docs/project_visualization.html)
 - [v1 Legacy Overview](docs/V1_LEGACY.md)
 - [v2 Upgrade Summary](docs/V2_UPGRADE_SUMMARY.md)
 - [Course Pack Demo](docs/COURSE_PACK_DEMO.md)

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from v2.schemas import Chunk
+from v2.source_metadata import enrich_source_metadata
 
 
 def document_dir(doc_id: str, output_root: str = "outputs") -> Path:
@@ -33,6 +34,10 @@ def chunk_from_dict(item: dict) -> Chunk:
         metadata["filename"] = item["filename"]
     if item.get("pack_id") and "pack_id" not in metadata:
         metadata["pack_id"] = item["pack_id"]
+    for key in ("week", "lecture_no"):
+        if item.get(key) is not None and key not in metadata:
+            metadata[key] = item[key]
+    metadata = enrich_source_metadata(metadata)
     return Chunk(
         chunk_id=item["chunk_id"],
         page=item.get("page", item.get("page_number", 1)),

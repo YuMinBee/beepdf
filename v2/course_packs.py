@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from v2.audio_script import generate_audio_script
+from v2.background_knowledge import BACKGROUND_SCOPE_VALUES, background_chunks_for_query
 from v2.course_summary import generate_course_pack_summary
 from v2.documents import chunk_from_dict, load_chunks
 from v2.graph.concept_map import build_concept_map
@@ -102,16 +103,21 @@ def load_course_pack_chunks(pack_id: str, output_root: str = "outputs") -> list[
     return chunks
 
 
-def ask_course_pack(pack_id: str, question: str, output_root: str = "outputs", top_k: int = 4) -> dict:
-    chunks = select_balanced_course_pack_chunks(pack_id, query=question, output_root=output_root, top_k=top_k)
-    result = generate_source_grounded_answer(
-        query=question,
-        chunks=chunks,
-        index_provider=_PreselectedIndexProvider(),
-        llm_provider=MockLLMProvider(),
-        top_k=top_k,
-    )
-    payload = result.to_dict()
+def ask_course_pack(pack_id: str, question: str, output_root: str = "outputs", top_k: int = 4, mode: str = "vector") -> dict:
+    if mode == "local_graph":
+        payload = _ask_course_pack_with_graph(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+    else:
+        chunks = select_balanced_course_pack_chunks(pack_id, query=question, output_root=output_root, top_k=top_k)
+        result = generate_source_grounded_answer(
+            query=question,
+            chunks=chunks,
+            index_provider=_PreselectedIndexProvider(),
+            llm_provider=MockLLMProvider(),
+            top_k=top_k,
+        )
+        payload = result.to_dict()
+        payload["mode"] = mode
+        payload["retrieval_mode"] = "vector"
     _save_pack_artifact(pack_id, output_root, f"answers/{_artifact_name(question)}.json", payload)
     return payload
 
@@ -148,8 +154,25 @@ def study_kit_for_course_pack(
     top_k: int = 4,
     max_items: int = 4,
 ) -> dict:
+    all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
     chunks = _select_pack_chunks(pack_id, query=query, output_root=output_root, top_k=top_k)
-    payload = generate_study_kit(chunks, max_items=max_items)
+    study_chunks = _dedupe_chunks([*chunks, *all_chunks])
+    base = generate_study_kit(chunks, max_items=max_items)
+    summary_payload = generate_course_pack_summary(study_chunks, max_items=max(max_items, 5))
+    payload = {
+        "overview": summary_payload.get("overview", {}),
+        "lecture_summaries": summary_payload.get("lecture_summaries", []),
+        "connections": summary_payload.get("connections", []),
+        "key_concepts": summary_payload.get("key_concepts", []),
+        "expected_questions": base.get("expected_questions", []),
+        "flashcards": _flashcards_from_study_payload(base, summary_payload, limit=max_items),
+        "summary": base.get("summary", {"text": "", "sources": []}),
+        "key_points": base.get("key_points", []),
+        "glossary": base.get("glossary", []),
+        "quiz": base.get("quiz", []),
+        "sources": summary_payload.get("sources", []),
+        "warnings": [*base.get("warnings", []), *summary_payload.get("warnings", [])],
+    }
     _save_pack_artifact(pack_id, output_root, "study_kit.json", payload)
     return payload
 
@@ -160,9 +183,21 @@ def audio_script_for_course_pack(
     output_root: str = "outputs",
     top_k: int = 4,
     mode: str = "briefing_3min",
+    llm_provider: str = "mock",
+    llm_model: str | None = None,
+    grounding: str = "creative",
+    target_minutes: int | None = None,
+    target_chars: int | None = None,
+    knowledge_scope: str = "course_pack",
 ) -> dict:
     chunks = _select_pack_chunks(pack_id, query=query, output_root=output_root, top_k=top_k)
-    payload = generate_audio_script(chunks, mode=mode)
+    background_chunks: list[Chunk] = []
+    if knowledge_scope in BACKGROUND_SCOPE_VALUES:
+        background_chunks = background_chunks_for_query(query=query, source_chunks=chunks)
+        chunks = _dedupe_chunks([*chunks, *background_chunks])
+    payload = generate_audio_script(chunks, mode=mode, llm_provider=llm_provider, llm_model=llm_model, grounding=grounding, target_minutes=target_minutes, target_chars=target_chars)
+    payload["knowledge_scope"] = knowledge_scope
+    payload["background_sources"] = [chunk.metadata for chunk in background_chunks]
     _save_pack_artifact(pack_id, output_root, "audio_script.json", payload)
     return payload
 
@@ -238,6 +273,115 @@ def select_balanced_course_pack_chunks(pack_id: str, query: str, output_root: st
     return _balanced_chunks(query=query, chunks=chunks, top_k=top_k)
 
 
+
+def _ask_course_pack_with_graph(pack_id: str, question: str, output_root: str, top_k: int) -> dict:
+    all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    graph = _load_or_build_course_pack_graph(pack_id, output_root=output_root, chunks=all_chunks)
+    graph_edges = _select_graph_edges(question, graph)
+    graph_chunks = _chunks_from_graph_edges(graph_edges, all_chunks)
+    warnings: list[str] = []
+    retrieval_mode = "local_graph"
+
+    if graph_chunks:
+        chunks = _dedupe_chunks(graph_chunks)[:top_k]
+    else:
+        retrieval_mode = "local_graph_fallback_vector"
+        warnings.append("No matching graph edge evidence was found. Falling back to balanced vector retrieval.")
+        chunks = _balanced_chunks(query=question, chunks=all_chunks, top_k=top_k)
+
+    result = generate_source_grounded_answer(
+        query=question,
+        chunks=chunks,
+        index_provider=_PreselectedIndexProvider(),
+        llm_provider=MockLLMProvider(),
+        top_k=top_k,
+    )
+    payload = result.to_dict()
+    payload["mode"] = "local_graph"
+    payload["retrieval_mode"] = retrieval_mode
+    payload["graph_context"] = graph_edges
+    payload["warnings"] = [*payload.get("warnings", []), *warnings]
+    return payload
+
+
+def _load_or_build_course_pack_graph(pack_id: str, output_root: str, chunks: list[Chunk]) -> dict:
+    output_dir = course_pack_dir(pack_id, output_root=output_root)
+    return build_concept_map(chunks, output_dir=str(output_dir))
+
+
+def _select_graph_edges(question: str, graph: dict) -> list[dict]:
+    entities = _query_entities(question, graph)
+    if not entities:
+        return []
+    exact: list[dict] = []
+    partial: list[dict] = []
+    for edge in graph.get("edges", []):
+        source = str(edge.get("source", ""))
+        target = str(edge.get("target", ""))
+        if source in entities and target in entities:
+            exact.append(edge)
+        elif source in entities or target in entities:
+            partial.append(edge)
+    return [*exact, *partial]
+
+
+def _query_entities(question: str, graph: dict) -> set[str]:
+    normalized = question.lower()
+    entities: set[str] = set()
+    for node in graph.get("nodes", []):
+        node_id = str(node.get("id", ""))
+        label = str(node.get("label") or node_id)
+        if node.get("type") == "document":
+            continue
+        if node_id.lower() in normalized or label.lower() in normalized:
+            entities.add(node_id)
+    return entities
+
+
+def _chunks_from_graph_edges(edges: list[dict], chunks: list[Chunk]) -> list[Chunk]:
+    selected: list[Chunk] = []
+    for edge in edges:
+        for evidence in edge.get("evidence", []) or []:
+            matched = _chunk_from_evidence(evidence, chunks)
+            if matched is not None:
+                selected.append(matched)
+    return selected
+
+
+def _chunk_from_evidence(evidence: dict, chunks: list[Chunk]) -> Chunk | None:
+    for chunk in chunks:
+        metadata = chunk.metadata or {}
+        if evidence.get("chunk_id") != chunk.chunk_id:
+            continue
+        if evidence.get("page") != chunk.page:
+            continue
+        if evidence.get("doc_id") and evidence.get("doc_id") != metadata.get("doc_id"):
+            continue
+        if evidence.get("filename") and evidence.get("filename") != metadata.get("filename"):
+            continue
+        return chunk
+    return None
+
+
+def _flashcards_from_study_payload(base: dict, summary_payload: dict, limit: int) -> list[dict]:
+    cards: list[dict] = []
+    for item in base.get("glossary", []):
+        term = item.get("term")
+        definition = item.get("definition")
+        if not term or not definition:
+            continue
+        cards.append({"front": term, "back": definition, "sources": item.get("sources", [])})
+        if len(cards) >= limit:
+            return cards
+    for item in summary_payload.get("key_concepts", []):
+        term = item.get("term")
+        description = item.get("description")
+        if not term or not description:
+            continue
+        cards.append({"front": term, "back": description, "sources": item.get("sources", [])})
+        if len(cards) >= limit:
+            return cards
+    return cards
 def _select_pack_chunks(pack_id: str, query: str, output_root: str, top_k: int) -> list[Chunk]:
     chunks = load_course_pack_chunks(pack_id, output_root=output_root)
     if not query:

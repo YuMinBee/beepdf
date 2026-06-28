@@ -93,6 +93,63 @@ class CoursePackBehaviorTest(unittest.TestCase):
         self.assertIn("page", source)
         self.assertIn("chunk_id", source)
 
+    def test_v2_course_pack_sources_include_lecture_metadata(self) -> None:
+        root = self._case_dir()
+        first = root / "자연어처리_11주차_1차시.txt"
+        second = root / "자연어처리_11주차_2차시.txt"
+        first.write_text("BPE reduces OOV through subword tokenization.", encoding="utf-8")
+        second.write_text("LSTM improves RNN sequence memory with gates.", encoding="utf-8")
+        pack = routes.ingest_course_pack(
+            CoursePackIngestRequest(
+                paths=[str(first), str(second)],
+                output_root=str(root / "outputs"),
+                max_chunk_chars=90,
+            )
+        )
+
+        chunks = json.loads((Path(pack["output_dir"]) / "chunks.json").read_text(encoding="utf-8"))["chunks"]
+        first_metadata = chunks[0]["metadata"]
+        self.assertEqual(first_metadata["week"], 11)
+        self.assertEqual(first_metadata["lecture_no"], 1)
+
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="BPE OOV",
+                output_root=str(root / "outputs"),
+            )
+        )
+        source = response["sources"][0]
+        self.assertEqual(source["week"], 11)
+        self.assertEqual(source["lecture_no"], 1)
+    def test_v2_course_pack_ask_local_graph_uses_edge_evidence(self) -> None:
+        root = self._case_dir()
+        first = root / "자연어처리_11주차_1차시.txt"
+        first.write_text("BPE reduces OOV through subword tokenization.", encoding="utf-8")
+        pack = routes.ingest_course_pack(
+            CoursePackIngestRequest(
+                paths=[str(first)],
+                output_root=str(root / "outputs"),
+                max_chunk_chars=120,
+            )
+        )
+
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="BPE와 OOV는 어떤 관계야?",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="local_graph",
+            )
+        )
+
+        self.assertEqual(response["mode"], "local_graph")
+        self.assertEqual(response["retrieval_mode"], "local_graph")
+        self.assertTrue(response["sources"])
+        self.assertTrue(response["graph_context"])
+        self.assertTrue(any(edge["source"] == "BPE" and edge["target"] == "OOV" for edge in response["graph_context"]))
+        self.assertTrue(response["graph_context"][0]["evidence"])
     def test_v2_course_pack_overview_query_balances_document_sources(self) -> None:
         pack, root = self._create_pack()
         response = routes.ask_course_pack(
@@ -123,6 +180,25 @@ class CoursePackBehaviorTest(unittest.TestCase):
         self.assertIn("doc_id", response["summary"]["sources"][0])
         self.assertTrue(all(item["sources"] for item in response["key_points"]))
 
+    def test_v2_course_pack_study_kit_is_course_pack_shaped(self) -> None:
+        pack, root = self._create_pack()
+        response = routes.study_kit_course_pack(
+            CoursePackStudyKitRequest(
+                pack_id=pack["pack_id"],
+                query="course pack overview summary",
+                output_root=str(root / "outputs"),
+                max_items=3,
+            )
+        )
+
+        self.assertTrue(response["overview"]["text"])
+        self.assertTrue(response["lecture_summaries"])
+        self.assertIn("connections", response)
+        self.assertTrue(response["key_concepts"])
+        self.assertTrue(response["expected_questions"])
+        self.assertTrue(response["flashcards"])
+        self.assertTrue(response["sources"])
+        self.assertTrue((Path(pack["output_dir"]) / "study_kit.json").exists())
     def test_v2_course_pack_summary_has_sources(self) -> None:
         pack, root = self._create_pack()
         response = routes.summary_course_pack(
@@ -217,6 +293,21 @@ class CoursePackBehaviorTest(unittest.TestCase):
         self.assertTrue(all(item["sources"] for item in response["script"]))
         self.assertIn("filename", response["script"][0]["sources"][0])
 
+    def test_v2_course_pack_audio_script_can_include_background_rag(self) -> None:
+        pack, root = self._create_pack()
+        response = routes.audio_script_course_pack(
+            CoursePackAudioScriptRequest(
+                pack_id=pack["pack_id"],
+                query="BPE OOV CNN podcast background",
+                output_root=str(root / "outputs"),
+                mode="podcast",
+                knowledge_scope="course_pack_plus_background",
+            )
+        )
+
+        self.assertEqual(response["knowledge_scope"], "course_pack_plus_background")
+        self.assertTrue(response["background_sources"])
+        self.assertTrue(any(source.get("filename") == "background_nlp_reference.md" for item in response["script"] for source in item["sources"]))
     def test_v2_course_pack_concept_map_links_documents(self) -> None:
         pack, root = self._create_pack()
         response = routes.concept_map_course_pack(

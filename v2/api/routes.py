@@ -139,7 +139,15 @@ def study_kit(request: StudyKitRequest) -> dict:
 
 def audio_script(request: AudioScriptRequest) -> dict:
     payload = _payload(request)
-    result = generate_audio_script(_selected_chunks(payload), mode=payload.get("mode", "briefing_3min"))
+    result = generate_audio_script(
+        _selected_chunks(payload),
+        mode=payload.get("mode", "briefing_3min"),
+        llm_provider=payload.get("llm_provider", "mock"),
+        llm_model=payload.get("llm_model"),
+        grounding=payload.get("grounding", "creative"),
+        target_minutes=payload.get("target_minutes"),
+        target_chars=payload.get("target_chars"),
+    )
     _save_doc_artifact(payload, "audio_script.json", result)
     return result
 
@@ -189,6 +197,7 @@ def ask_course_pack(request: CoursePackQueryRequest) -> dict:
         question=_query(payload),
         output_root=payload.get("output_root", "outputs"),
         top_k=payload.get("top_k", 4),
+        mode=payload.get("mode", "vector"),
     )
 
 
@@ -227,6 +236,12 @@ def audio_script_course_pack(request: CoursePackAudioScriptRequest) -> dict:
         output_root=payload.get("output_root", "outputs"),
         top_k=payload.get("top_k", 4),
         mode=payload.get("mode", "briefing_3min"),
+        llm_provider=payload.get("llm_provider", "mock"),
+        llm_model=payload.get("llm_model"),
+        grounding=payload.get("grounding", "creative"),
+        target_minutes=payload.get("target_minutes"),
+        target_chars=payload.get("target_chars"),
+        knowledge_scope=payload.get("knowledge_scope", "course_pack"),
     )
 
 

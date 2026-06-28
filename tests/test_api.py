@@ -16,6 +16,11 @@ class ApiSchemaTest(unittest.TestCase):
         self.assertEqual(ingest.output_root, "outputs")
         self.assertEqual(query.top_k, 4)
         self.assertEqual(audio.mode, "briefing_3min")
+        self.assertEqual(audio.llm_provider, "mock")
+        self.assertEqual(audio.grounding, "creative")
+        self.assertEqual(audio.target_minutes, None)
+        self.assertEqual(audio.target_chars, None)
+        self.assertEqual(audio.knowledge_scope, "course_pack")
         self.assertEqual(summary.llm_provider, "mock")
         self.assertEqual(summary.llm_model, None)
 
