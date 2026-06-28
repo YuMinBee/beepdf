@@ -1,0 +1,453 @@
+﻿from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections import OrderedDict
+from dataclasses import asdict
+from pathlib import Path
+from uuid import uuid4
+
+from v2.audio_script import generate_audio_script
+from v2.course_summary import generate_course_pack_summary
+from v2.documents import chunk_from_dict, load_chunks
+from v2.graph.concept_map import build_concept_map
+from v2.ingest import ingest_local_document
+from v2.providers.local import MockLLMProvider
+from v2.rag.answering import generate_source_grounded_answer
+from v2.rag.retrieval import chunks_from_contexts, retrieve_contexts
+from v2.schemas import Chunk
+from v2.study_kit import generate_study_kit
+
+OVERVIEW_QUERY_TERMS = {
+    "전체",
+    "요약",
+    "정리",
+    "핵심",
+    "개요",
+    "흐름",
+    "course",
+    "pack",
+    "overview",
+    "summary",
+    "summarize",
+    "outline",
+}
+
+
+def course_pack_dir(pack_id: str, output_root: str = "outputs") -> Path:
+    return Path(output_root) / "course_packs" / pack_id
+
+
+def create_course_pack(
+    paths: list[str],
+    output_root: str = "outputs",
+    max_chunk_chars: int = 900,
+    pack_id: str | None = None,
+) -> dict:
+    warnings: list[str] = []
+    documents: list[dict] = []
+    chunks: list[Chunk] = []
+
+    for path in paths:
+        result = ingest_local_document(path=path, output_root=output_root, max_chunk_chars=max_chunk_chars)
+        document = result.to_dict()
+        documents.append(document)
+        warnings.extend([f"{result.filename}: {warning}" for warning in result.warnings])
+        for chunk in load_chunks(result.doc_id, output_root=output_root):
+            chunk.metadata.setdefault("doc_id", result.doc_id)
+            chunk.metadata.setdefault("filename", result.filename)
+            chunks.append(chunk)
+
+    safe_pack_id = _safe_pack_id(pack_id) if pack_id else _pack_id_from_documents(documents)
+    for chunk in chunks:
+        chunk.metadata["pack_id"] = safe_pack_id
+
+    output_dir = course_pack_dir(safe_pack_id, output_root=output_root)
+    (output_dir / "answers").mkdir(parents=True, exist_ok=True)
+
+    response = {
+        "pack_id": safe_pack_id,
+        "document_count": len(documents),
+        "chunk_count": len(chunks),
+        "documents": documents,
+        "output_dir": str(output_dir),
+        "warnings": warnings,
+    }
+
+    _write_json(output_dir / "course_pack.json", response)
+    _write_json(output_dir / "chunks.json", {"chunks": [asdict(chunk) for chunk in chunks]})
+    build_concept_map(chunks, output_dir=str(output_dir))
+    _write_json(output_dir / "summary.json", {})
+    _write_json(output_dir / "study_kit.json", {})
+    _write_json(output_dir / "audio_script.json", {})
+    return response
+
+
+def load_course_pack(pack_id: str, output_root: str = "outputs") -> dict:
+    path = course_pack_dir(pack_id, output_root=output_root) / "course_pack.json"
+    if not path.exists():
+        return {"pack_id": pack_id, "warnings": [f"course pack not found: {pack_id}"]}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_course_pack_chunks(pack_id: str, output_root: str = "outputs") -> list[Chunk]:
+    path = course_pack_dir(pack_id, output_root=output_root) / "chunks.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text(encoding="utf-8"))
+    chunks = [chunk_from_dict(item) for item in data.get("chunks", [])]
+    for chunk in chunks:
+        chunk.metadata.setdefault("pack_id", pack_id)
+    return chunks
+
+
+def ask_course_pack(pack_id: str, question: str, output_root: str = "outputs", top_k: int = 4) -> dict:
+    chunks = select_balanced_course_pack_chunks(pack_id, query=question, output_root=output_root, top_k=top_k)
+    result = generate_source_grounded_answer(
+        query=question,
+        chunks=chunks,
+        index_provider=_PreselectedIndexProvider(),
+        llm_provider=MockLLMProvider(),
+        top_k=top_k,
+    )
+    payload = result.to_dict()
+    _save_pack_artifact(pack_id, output_root, f"answers/{_artifact_name(question)}.json", payload)
+    return payload
+
+
+def summary_for_course_pack(
+    pack_id: str,
+    query: str = "",
+    output_root: str = "outputs",
+    top_k: int = 8,
+    max_items: int = 5,
+    llm_provider: str = "mock",
+    llm_model: str | None = None,
+) -> dict:
+    all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    target_query = query or "course pack overview summary"
+    min_top_k = max(top_k, max_items, len(_group_chunks_by_document(all_chunks)))
+    selected_chunks = _balanced_chunks(query=target_query, chunks=all_chunks, top_k=min_top_k)
+    summary_chunks = _dedupe_chunks([*selected_chunks, *all_chunks])
+    payload = generate_course_pack_summary(
+        summary_chunks,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        max_items=max_items,
+    )
+    payload["pack_id"] = pack_id
+    _save_pack_artifact(pack_id, output_root, "summary.json", payload)
+    return payload
+
+
+def study_kit_for_course_pack(
+    pack_id: str,
+    query: str = "",
+    output_root: str = "outputs",
+    top_k: int = 4,
+    max_items: int = 4,
+) -> dict:
+    chunks = _select_pack_chunks(pack_id, query=query, output_root=output_root, top_k=top_k)
+    payload = generate_study_kit(chunks, max_items=max_items)
+    _save_pack_artifact(pack_id, output_root, "study_kit.json", payload)
+    return payload
+
+
+def audio_script_for_course_pack(
+    pack_id: str,
+    query: str = "",
+    output_root: str = "outputs",
+    top_k: int = 4,
+    mode: str = "briefing_3min",
+) -> dict:
+    chunks = _select_pack_chunks(pack_id, query=query, output_root=output_root, top_k=top_k)
+    payload = generate_audio_script(chunks, mode=mode)
+    _save_pack_artifact(pack_id, output_root, "audio_script.json", payload)
+    return payload
+
+
+def concept_map_for_course_pack(
+    pack_id: str,
+    output_root: str = "outputs",
+) -> dict:
+    chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    return build_concept_map(chunks, output_dir=str(course_pack_dir(pack_id, output_root=output_root)))
+
+
+def artifacts_for_course_pack(
+    pack_id: str,
+    output_root: str = "outputs",
+    include_content: bool = True,
+) -> dict:
+    output_dir = course_pack_dir(pack_id, output_root=output_root)
+    warnings: list[str] = []
+    artifact_names = {
+        "course_pack": "course_pack.json",
+        "summary": "summary.json",
+        "study_kit": "study_kit.json",
+        "audio_script": "audio_script.json",
+        "graph": "graph.json",
+        "chunks": "chunks.json",
+        "concept_map_mermaid": "concept_map.mmd",
+        "concept_map_html": "concept_map.html",
+    }
+    artifacts = {
+        name: _artifact_preview(output_dir / filename, include_content=include_content)
+        for name, filename in artifact_names.items()
+    }
+    answers_dir = output_dir / "answers"
+    answers = []
+    if answers_dir.exists():
+        answers = [_artifact_preview(path, include_content=include_content) for path in sorted(answers_dir.glob("*.json"))]
+
+    missing = [name for name, artifact in artifacts.items() if not artifact["exists"]]
+    if missing:
+        warnings.append("Missing artifacts: " + ", ".join(missing))
+
+    return {
+        "pack_id": pack_id,
+        "output_dir": str(output_dir),
+        "artifacts": artifacts,
+        "answers": answers,
+        "warnings": warnings,
+    }
+
+
+def export_concept_map_for_course_pack(
+    pack_id: str,
+    output_root: str = "outputs",
+    max_nodes: int = 60,
+    max_edges: int = 120,
+) -> dict:
+    output_dir = course_pack_dir(pack_id, output_root=output_root)
+    graph = concept_map_for_course_pack(pack_id=pack_id, output_root=output_root)
+    export = _export_concept_map(graph, output_dir=output_dir, max_nodes=max_nodes, max_edges=max_edges)
+    return {
+        "pack_id": pack_id,
+        "output_dir": str(output_dir),
+        "node_count": len(graph.get("nodes", [])),
+        "edge_count": len(graph.get("edges", [])),
+        **export,
+        "warnings": [*graph.get("warnings", []), *export.get("warnings", [])],
+    }
+
+
+def select_balanced_course_pack_chunks(pack_id: str, query: str, output_root: str = "outputs", top_k: int = 4) -> list[Chunk]:
+    chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    return _balanced_chunks(query=query, chunks=chunks, top_k=top_k)
+
+
+def _select_pack_chunks(pack_id: str, query: str, output_root: str, top_k: int) -> list[Chunk]:
+    chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    if not query:
+        return _balanced_chunks(query="전체 요약", chunks=chunks, top_k=max(top_k, len(_group_chunks_by_document(chunks))))
+    return _balanced_chunks(query=query, chunks=chunks, top_k=top_k)
+
+
+def _balanced_chunks(query: str, chunks: list[Chunk], top_k: int) -> list[Chunk]:
+    if not chunks or top_k <= 0:
+        return []
+
+    groups = _group_chunks_by_document(chunks)
+    is_overview = _is_overview_query(query)
+    selected: list[Chunk] = []
+
+    for group in groups.values():
+        contexts = retrieve_contexts(query=query, chunks=group, top_k=1).contexts if query else []
+        if contexts:
+            selected.extend(chunks_from_contexts(contexts))
+            continue
+        if is_overview:
+            representative = _representative_chunk(group)
+            if representative is not None:
+                selected.append(representative)
+
+    global_contexts = retrieve_contexts(query=query, chunks=chunks, top_k=max(top_k, 1)).contexts if query else []
+    selected.extend(chunks_from_contexts(global_contexts))
+
+    if not selected and is_overview:
+        selected.extend(chunk for chunk in (_representative_chunk(group) for group in groups.values()) if chunk is not None)
+
+    return _dedupe_chunks(selected)[:top_k]
+
+
+def _group_chunks_by_document(chunks: list[Chunk]) -> OrderedDict[str, list[Chunk]]:
+    groups: OrderedDict[str, list[Chunk]] = OrderedDict()
+    for chunk in chunks:
+        key = _document_key(chunk)
+        groups.setdefault(key, []).append(chunk)
+    return groups
+
+
+def _document_key(chunk: Chunk) -> str:
+    metadata = chunk.metadata or {}
+    return str(metadata.get("doc_id") or metadata.get("filename") or "document")
+
+
+def _representative_chunk(chunks: list[Chunk]) -> Chunk | None:
+    if not chunks:
+        return None
+    meaningful = [chunk for chunk in chunks if len(chunk.text.strip()) >= 30]
+    if meaningful:
+        return meaningful[0]
+    return chunks[0]
+
+
+def _dedupe_chunks(chunks: list[Chunk]) -> list[Chunk]:
+    deduped: list[Chunk] = []
+    seen: set[tuple[str | None, str | None, int, str]] = set()
+    for chunk in chunks:
+        metadata = chunk.metadata or {}
+        key = (metadata.get("doc_id"), metadata.get("filename"), chunk.page, chunk.chunk_id)
+        if key in seen:
+            continue
+        deduped.append(chunk)
+        seen.add(key)
+    return deduped
+
+
+def _is_overview_query(query: str) -> bool:
+    normalized = query.lower()
+    return not query.strip() or any(term in normalized for term in OVERVIEW_QUERY_TERMS)
+
+
+def _pack_id_from_documents(documents: list[dict]) -> str:
+    if not documents:
+        return f"pack_{uuid4().hex[:12]}"
+    digest = hashlib.sha256()
+    for document in documents:
+        digest.update(str(document.get("doc_id", "")).encode("utf-8"))
+        digest.update(str(document.get("filename", "")).encode("utf-8"))
+    return f"pack_{digest.hexdigest()[:16]}"
+
+
+def _safe_pack_id(pack_id: str | None) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", pack_id or "").strip("-_.")
+    return cleaned or f"pack_{uuid4().hex[:12]}"
+
+
+def _artifact_name(text: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9가-힣_.-]+", "-", text or "answer").strip("-_.")
+    return (cleaned or "answer")[:80]
+
+
+def _save_pack_artifact(pack_id: str, output_root: str, name: str, payload: dict) -> None:
+    path = course_pack_dir(pack_id, output_root=output_root) / name
+    _write_json(path, payload)
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _artifact_preview(path: Path, include_content: bool) -> dict:
+    preview = {
+        "name": path.name,
+        "path": str(path),
+        "exists": path.exists(),
+    }
+    if not path.exists() or not include_content:
+        return preview
+    if path.suffix.lower() == ".json":
+        try:
+            preview["data"] = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            preview["error"] = f"invalid json: {error}"
+        return preview
+    text = path.read_text(encoding="utf-8")
+    preview["text"] = text[:12000]
+    preview["truncated"] = len(text) > 12000
+    return preview
+
+
+def _export_concept_map(graph: dict, output_dir: Path, max_nodes: int, max_edges: int) -> dict:
+    max_nodes = max(1, max_nodes)
+    max_edges = max(1, max_edges)
+    nodes = graph.get("nodes", [])[:max_nodes]
+    node_ids = {node.get("id") for node in nodes}
+    edges = [edge for edge in graph.get("edges", []) if edge.get("source") in node_ids and edge.get("target") in node_ids]
+    edges = edges[:max_edges]
+    warnings: list[str] = []
+    if len(graph.get("nodes", [])) > len(nodes):
+        warnings.append(f"Concept map export limited nodes to {len(nodes)} of {len(graph.get('nodes', []))}.")
+    if len(graph.get("edges", [])) > len(edges):
+        warnings.append(f"Concept map export limited edges to {len(edges)} of {len(graph.get('edges', []))}.")
+
+    mermaid = _concept_map_mermaid(nodes, edges)
+    html = _concept_map_html(mermaid)
+    mermaid_path = output_dir / "concept_map.mmd"
+    html_path = output_dir / "concept_map.html"
+    mermaid_path.parent.mkdir(parents=True, exist_ok=True)
+    mermaid_path.write_text(mermaid, encoding="utf-8")
+    html_path.write_text(html, encoding="utf-8")
+    return {
+        "format": "mermaid",
+        "mermaid_path": str(mermaid_path),
+        "html_path": str(html_path),
+        "mermaid": mermaid,
+        "exported_node_count": len(nodes),
+        "exported_edge_count": len(edges),
+        "warnings": warnings,
+    }
+
+
+def _concept_map_mermaid(nodes: list[dict], edges: list[dict]) -> str:
+    lines = ["flowchart LR"]
+    id_map = {str(node.get("id")): f"n{index}" for index, node in enumerate(nodes)}
+    for node in nodes:
+        node_id = str(node.get("id"))
+        mermaid_id = id_map[node_id]
+        label = _mermaid_label(str(node.get("label") or node_id))
+        shape = "{{{label}}}" if node.get("type") == "document" else "[{label}]"
+        lines.append(f"  {mermaid_id}{shape.format(label=label)}")
+    for edge in edges:
+        source = id_map.get(str(edge.get("source")))
+        target = id_map.get(str(edge.get("target")))
+        if not source or not target:
+            continue
+        relation = _mermaid_label(str(edge.get("relation") or "related_to"))
+        lines.append(f"  {source} -- {relation} --> {target}")
+    return "\n".join(lines) + "\n"
+
+
+def _concept_map_html(mermaid: str) -> str:
+    escaped = mermaid.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return "\n".join(
+        [
+            "<!doctype html>",
+            "<html lang=\"ko\">",
+            "<head>",
+            "  <meta charset=\"utf-8\" />",
+            "  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
+            "  <title>BeePDF Course Pack Concept Map</title>",
+            "  <style>body{font-family:Arial,sans-serif;margin:24px;background:#f7f7f8;color:#171717}.wrap{max-width:1200px;margin:auto;background:white;border:1px solid #ddd;border-radius:8px;padding:20px}pre{white-space:pre-wrap;background:#111;color:#eee;padding:16px;border-radius:6px;overflow:auto}</style>",
+            "</head>",
+            "<body>",
+            "  <div class=\"wrap\">",
+            "    <h1>BeePDF Course Pack Concept Map</h1>",
+            "    <p>Mermaid diagram generated from GraphRAG-lite concept relationships.</p>",
+            "    <div class=\"mermaid\">",
+            escaped,
+            "    </div>",
+            "    <h2>Mermaid Source</h2>",
+            f"    <pre>{escaped}</pre>",
+            "  </div>",
+            "  <script type=\"module\">import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'; mermaid.initialize({startOnLoad:true});</script>",
+            "</body>",
+            "</html>",
+        ]
+    )
+
+
+def _mermaid_label(text: str) -> str:
+    cleaned = " ".join(text.split())[:80]
+    return "\"" + cleaned.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
+
+class _PreselectedIndexProvider:
+    def search(self, question: str, chunks: list[Chunk], top_k: int = 4) -> list[Chunk]:
+        return chunks[:top_k]
+
+

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import unittest
@@ -53,6 +53,8 @@ class V2EndpointBehaviorTest(unittest.TestCase):
         self.assertIn("chunk_id", chunks[0])
         self.assertEqual(chunks[0]["page"], 1)
         self.assertEqual(chunks[0]["chunk_id"], "p1_c1")
+        self.assertEqual(chunks[0]["metadata"]["doc_id"], result["doc_id"])
+        self.assertEqual(chunks[0]["metadata"]["filename"], "sample.txt")
 
     def test_v2_ask_returns_sources(self) -> None:
         result = self._ingest_text(".txt")
@@ -124,4 +126,5 @@ class V2EndpointBehaviorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 

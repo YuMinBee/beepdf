@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import unittest
 
@@ -6,6 +6,7 @@ from v2.audio_script import generate_audio_script
 from v2.graph.concept_map import build_concept_map
 from v2.providers.mock import MockIndexProvider, MockLLMProvider
 from v2.rag.answering import NO_CONTEXT_WARNING, generate_source_grounded_answer
+from v2.rag.citations import check_text_grounding
 from v2.rag.chunking import chunk_pages
 from v2.schemas import PageMarkdown
 from v2.study_kit import generate_study_kit
@@ -41,6 +42,8 @@ class SourceGroundedGenerationTest(unittest.TestCase):
 
         payload = result.to_dict()
         self.assertTrue(payload["answer"])
+        self.assertIn("검색된 문서 근거", payload["answer"])
+        self.assertNotIn("Based on the retrieved source chunks", payload["answer"])
         self.assertGreaterEqual(len(payload["sources"]), 1)
         self.assertEqual(payload["sources"][0]["page"], 1)
         self.assertEqual(payload["sources"][0]["chunk_id"], "p1_c1")
@@ -58,10 +61,35 @@ class SourceGroundedGenerationTest(unittest.TestCase):
         self.assertEqual(result.sources, [])
         self.assertEqual(result.warnings, [NO_CONTEXT_WARNING])
 
+    def test_citation_check_passes_grounded_text(self) -> None:
+        result = check_text_grounding(
+            "OCR fallback handles scanned PDFs and sha256 cache reduces repeated processing cost.",
+            self._chunks(),
+        )
+
+        self.assertTrue(result.checked)
+        self.assertTrue(result.passed)
+        self.assertGreater(result.coverage, 0)
+        self.assertIn("ocr", result.matched_terms)
+
+    def test_citation_check_flags_unsupported_text(self) -> None:
+        result = check_text_grounding(
+            "양자역학과 르네상스 미술사를 중심으로 설명합니다.",
+            self._chunks(),
+        )
+
+        self.assertTrue(result.checked)
+        self.assertFalse(result.passed)
+        self.assertTrue(result.unsupported_terms)
+        self.assertTrue(result.warnings)
+
+
     def test_study_kit_preserves_sources_for_all_items(self) -> None:
         kit = generate_study_kit(self._chunks())
 
         self.assertTrue(kit["summary"]["sources"])
+        self.assertIn("근거에 따르면", kit["summary"]["text"])
+        self.assertNotIn("This section explains", kit["summary"]["text"])
         self.assertTrue(kit["key_points"])
         self.assertTrue(kit["glossary"])
         self.assertTrue(kit["quiz"])
@@ -78,6 +106,7 @@ class SourceGroundedGenerationTest(unittest.TestCase):
 
             self.assertEqual(script["mode"], mode)
             self.assertTrue(script["script"])
+            self.assertRegex(script["script"][0]["text"], "브리핑|대본|근거")
             self.assertEqual(script["tts_status"], "mock")
             self.assertIsNone(script["audio_path"])
             self.assertTrue(all(segment["sources"] for segment in script["script"]))
@@ -101,3 +130,4 @@ class SourceGroundedGenerationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

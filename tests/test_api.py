@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import unittest
 
 from v2.api.routes import router
-from v2.api.schemas import AudioScriptRequest, IngestRequest, QueryRequest
+from v2.api.schemas import AudioScriptRequest, CoursePackSummaryRequest, IngestRequest, QueryRequest
 
 
 class ApiSchemaTest(unittest.TestCase):
@@ -11,10 +11,13 @@ class ApiSchemaTest(unittest.TestCase):
         ingest = IngestRequest(path="sample.txt")
         query = QueryRequest(doc_id="abc123", question="What is this document about?")
         audio = AudioScriptRequest(doc_id="abc123", query="OCR", mode="briefing_3min")
+        summary = CoursePackSummaryRequest(pack_id="pack_abc123")
 
         self.assertEqual(ingest.output_root, "outputs")
         self.assertEqual(query.top_k, 4)
         self.assertEqual(audio.mode, "briefing_3min")
+        self.assertEqual(summary.llm_provider, "mock")
+        self.assertEqual(summary.llm_model, None)
 
     def test_router_is_defined_when_fastapi_is_available(self) -> None:
         if router is not None:
@@ -29,4 +32,6 @@ class ApiSchemaTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
 

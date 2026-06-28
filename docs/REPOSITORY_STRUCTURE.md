@@ -1,4 +1,4 @@
-# Repository Structure
+﻿# Repository Structure
 
 This repository intentionally keeps v1 and v2 side by side.
 
@@ -6,10 +6,10 @@ This repository intentionally keeps v1 and v2 side by side.
 
 | Area | Version | Role |
 | --- | --- | --- |
-| `app/main.py` | v1 | Legacy FastAPI PDF-to-audio service with OCR, Studio, Voice, Object Storage, DB logging, and request tracking. |
-| `db/` | v1 | Database schema and metadata for the original cloud service. |
-| `infra/` | v1 | NCP/cloud deployment and infrastructure notes. |
-| `web/` | v1 | Original web/static frontend assets. |
+| `v1/app/main.py` | v1 | Legacy FastAPI PDF-to-audio service with OCR, Studio, Voice, Object Storage, DB logging, and request tracking. |
+| `v1/db/` | v1 | Database schema and metadata for the original cloud service. |
+| `v1/infra/` | v1 | NCP/cloud deployment and infrastructure notes. |
+| `v1/web/` | v1 | Original web/static frontend assets. |
 | `v2/` | v2 | Local-first Course Pack Document AI package. |
 | `v2/main.py` | v2 | FastAPI entrypoint for the v2 local demo. |
 | `tests/` | v2 | Current local tests for v2 behavior. |
@@ -27,14 +27,14 @@ multiple lecture PDFs
 -> GraphRAG-lite Concept Map
 ```
 
-Because the product direction changed, v2 has a separate package and FastAPI entrypoint instead of being mixed into `app/main.py`.
+Because the product direction changed, v2 has a separate package and FastAPI entrypoint instead of being mixed into `v1/app/main.py`.
 
 ## Run Targets
 
 v1 legacy service:
 
 ```bash
-uvicorn app.main:app
+uvicorn v1.app.main:app
 ```
 
 v2 local demo:
@@ -48,4 +48,5 @@ uvicorn v2.main:app --reload --port 8000
 - New Course Pack features should go under `v2/`.
 - New v2 API routes should go under `v2/api/`.
 - New v2 tests should stay in `tests/` and use `test_v2_...` names when endpoint-level behavior is involved.
-- Legacy PDF-to-audio maintenance stays in `app/main.py` or a future `v1/` extraction.
+- Legacy PDF-to-audio maintenance stays under `v1/`.
+

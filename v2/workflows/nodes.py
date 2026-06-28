@@ -1,9 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict
 
 from v2.graph.concept_map import build_concept_map
 from v2.providers.base import DocumentParser, IndexProvider, LLMProvider, StorageProvider
+from v2.rag.citations import check_text_grounding
 from v2.rag.chunking import chunk_pages
 from v2.rag.vector_rag import answer_with_sources
 from v2.workflows.state import BeePDFState
@@ -78,7 +79,22 @@ def script_generation_node(state: BeePDFState, llm_provider: LLMProvider, minute
 
 def citation_check_node(state: BeePDFState) -> BeePDFState:
     answer = state.outputs.get("answer", {})
-    state.outputs["citation_check"] = bool(answer.get("vector_sources"))
+    if not answer.get("vector_sources"):
+        state.outputs["citation_check"] = {
+            "checked": True,
+            "passed": False,
+            "coverage": 0.0,
+            "matched_terms": [],
+            "unsupported_terms": [],
+            "source_count": 0,
+            "warnings": ["Citation check failed because the answer has no vector sources."],
+        }
+        return state
+
+    state.outputs["citation_check"] = check_text_grounding(
+        answer.get("answer", ""),
+        state.chunks,
+    ).to_dict()
     return state
 
 

@@ -1,9 +1,14 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from v2.schemas import Chunk, PageMarkdown
 
 
-def chunk_pages(pages: list[PageMarkdown], max_chars: int = 900, filename: str | None = None) -> list[Chunk]:
+def chunk_pages(
+    pages: list[PageMarkdown],
+    max_chars: int = 900,
+    filename: str | None = None,
+    doc_id: str | None = None,
+) -> list[Chunk]:
     chunks: list[Chunk] = []
     for page in pages:
         text = page.markdown
@@ -17,6 +22,8 @@ def chunk_pages(pages: list[PageMarkdown], max_chars: int = 900, filename: str |
                 continue
             end = start + len(raw_part)
             metadata = {"parser": page.parser}
+            if doc_id:
+                metadata["doc_id"] = doc_id
             if filename:
                 metadata["filename"] = filename
             chunks.append(

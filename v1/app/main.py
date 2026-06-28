@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+﻿from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.responses import FileResponse
 from starlette.background import BackgroundTask
@@ -1431,3 +1431,4 @@ async def podcast_from_pdf(request: Request, file: UploadFile = File(...), force
         raise HTTPException(status_code=500, detail=f"서버 오류: {str(e)[:300]}")
     finally:
         shutil.rmtree(base_dir, ignore_errors=True)
+

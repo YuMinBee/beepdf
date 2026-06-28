@@ -1,7 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
+import re
+import zipfile
+import xml.etree.ElementTree as ET
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
@@ -11,7 +15,10 @@ from v2.providers.ocr import LocalTesseractOCRProvider
 from v2.rag.chunking import chunk_pages
 from v2.schemas import DocumentIngestResult, PageMarkdown
 
-SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md"}
+SUPPORTED_EXTENSIONS = {".pdf", ".txt", ".md", ".pptx"}
+PML_NS = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+DRAWING_TEXT_TAG = "{http://schemas.openxmlformats.org/drawingml/2006/main}t"
+REL_ID_ATTR = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id"
 
 
 def ingest_local_document(path: str, output_root: str = "outputs", max_chunk_chars: int = 900) -> DocumentIngestResult:
@@ -32,6 +39,8 @@ def ingest_local_document(path: str, output_root: str = "outputs", max_chunk_cha
 
     if extension == ".pdf":
         pages = _parse_pdf(source_path, warnings)
+    elif extension == ".pptx":
+        pages = _parse_pptx(source_path, warnings)
     else:
         pages = _parse_text_document(source_path, warnings, parser=extension.lstrip("."))
 
@@ -44,6 +53,100 @@ def _parse_text_document(path: Path, warnings: list[str], parser: str) -> list[P
         warnings.append("document text is empty")
         return []
     return [PageMarkdown(page_number=1, markdown=text, parser=parser)]
+
+
+def _parse_pptx(path: Path, warnings: list[str]) -> list[PageMarkdown]:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            slide_names = _ordered_pptx_slide_names(archive)
+            if not slide_names:
+                warnings.append("PPTX contains no readable slides.")
+                return []
+
+            pages: list[PageMarkdown] = []
+            for slide_number, slide_name in enumerate(slide_names, start=1):
+                text = _pptx_xml_text(archive.read(slide_name))
+                if text.strip():
+                    pages.append(PageMarkdown(page_number=slide_number, markdown=text, parser="pptx"))
+            if not pages:
+                warnings.append("PPTX slides did not contain extractable text.")
+            return pages
+    except zipfile.BadZipFile:
+        warnings.append("PPTX parser failed: invalid pptx zip package")
+        return []
+    except KeyError as error:
+        warnings.append(f"PPTX parser failed: missing package part {error}")
+        return []
+    except ET.ParseError as error:
+        warnings.append(f"PPTX parser failed: invalid slide XML {error}")
+        return []
+
+
+def _ordered_pptx_slide_names(archive: zipfile.ZipFile) -> list[str]:
+    names = set(archive.namelist())
+    fallback = sorted(
+        (name for name in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)),
+        key=_slide_number_from_name,
+    )
+
+    try:
+        presentation = ET.fromstring(archive.read("ppt/presentation.xml"))
+        rels = ET.fromstring(archive.read("ppt/_rels/presentation.xml.rels"))
+    except (KeyError, ET.ParseError):
+        return fallback
+
+    relationships = {
+        rel.attrib.get("Id"): rel.attrib.get("Target", "")
+        for rel in rels
+        if rel.attrib.get("Id") and rel.attrib.get("Target")
+    }
+
+    ordered: list[str] = []
+    for slide_id in presentation.findall(f".//{PML_NS}sldId"):
+        rel_id = slide_id.attrib.get(REL_ID_ATTR)
+        target = relationships.get(rel_id or "")
+        if not target:
+            continue
+        slide_name = _normalize_pptx_target(target)
+        if slide_name in names:
+            ordered.append(slide_name)
+
+    return ordered or fallback
+
+
+def _normalize_pptx_target(target: str) -> str:
+    if target.startswith("/"):
+        return target.lstrip("/")
+    if target.startswith("ppt/"):
+        return posixpath.normpath(target)
+    return posixpath.normpath(f"ppt/{target}")
+
+
+def _slide_number_from_name(name: str) -> int:
+    match = re.search(r"slide(\d+)\.xml$", name)
+    return int(match.group(1)) if match else 0
+
+
+def _pptx_xml_text(payload: bytes) -> str:
+    root = ET.fromstring(payload)
+    texts: list[str] = []
+    for element in root.iter():
+        if element.tag != DRAWING_TEXT_TAG or element.text is None:
+            continue
+        text = " ".join(element.text.split())
+        if text:
+            texts.append(text)
+    return "\n".join(_dedupe_consecutive(texts))
+
+
+def _dedupe_consecutive(items: list[str]) -> list[str]:
+    deduped: list[str] = []
+    for item in items:
+        if not deduped or deduped[-1] != item:
+            deduped.append(item)
+    return deduped
+
+
 def _has_enough_text(pages: list[PageMarkdown], min_chars: int = 40) -> bool:
     total_chars = sum(len(page.markdown.strip()) for page in pages)
     return total_chars >= min_chars
@@ -128,7 +231,7 @@ def _write_ingest_outputs(
     warnings: list[str],
     max_chunk_chars: int,
 ) -> DocumentIngestResult:
-    chunks = chunk_pages(pages, max_chars=max_chunk_chars, filename=filename)
+    chunks = chunk_pages(pages, max_chars=max_chunk_chars, filename=filename, doc_id=doc_id)
     output_dir = Path(output_root) / doc_id
     answers_dir = output_dir / "answers"
     answers_dir.mkdir(parents=True, exist_ok=True)
@@ -172,5 +275,3 @@ def _read_text(path: Path, warnings: list[str]) -> str:
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-

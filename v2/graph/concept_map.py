@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -39,27 +39,53 @@ def build_concept_map(chunks: list[Chunk], output_dir: str | None = None) -> dic
     warnings: list[str] = []
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
-    seen_edges: set[tuple[str, str, str, str]] = set()
+    seen_edges: set[tuple[str, str, str, str | None, str]] = set()
 
     for chunk in chunks:
         concepts = _concepts_from_text(chunk.text)
+        doc_id = chunk.metadata.get("doc_id") if chunk.metadata else None
+        filename = chunk.metadata.get("filename") if chunk.metadata else None
+        doc_node_id = _document_node_id(doc_id, filename)
+
+        if doc_node_id:
+            nodes.setdefault(
+                doc_node_id,
+                {
+                    "id": doc_node_id,
+                    "label": filename or doc_id or "document",
+                    "type": "document",
+                    "doc_id": doc_id,
+                    "filename": filename,
+                },
+            )
+
         for concept in concepts:
-            nodes[concept] = {"id": concept, "label": concept, "type": "concept"}
+            node = nodes.setdefault(concept, {"id": concept, "label": concept, "type": "concept", "documents": []})
+            _add_document_to_node(node, doc_id=doc_id, filename=filename)
+            if doc_node_id:
+                _append_edge(
+                    edges,
+                    seen_edges,
+                    source=concept,
+                    target=doc_node_id,
+                    relation="appears_in",
+                    chunk=chunk,
+                    evidence_doc_id=doc_id,
+                )
 
         for source, target, relation in _edges_from_concepts(concepts):
-            nodes.setdefault(source, {"id": source, "label": source, "type": "concept"})
-            nodes.setdefault(target, {"id": target, "label": target, "type": "concept"})
-            key = (source, target, relation, chunk.chunk_id)
-            if key in seen_edges:
-                continue
-            seen_edges.add(key)
-            edges.append(
-                {
-                    "source": source,
-                    "target": target,
-                    "relation": relation,
-                    "evidence": [source_ref.to_dict() for source_ref in _sources_from_chunks([chunk])],
-                }
+            source_node = nodes.setdefault(source, {"id": source, "label": source, "type": "concept", "documents": []})
+            target_node = nodes.setdefault(target, {"id": target, "label": target, "type": "concept", "documents": []})
+            _add_document_to_node(source_node, doc_id=doc_id, filename=filename)
+            _add_document_to_node(target_node, doc_id=doc_id, filename=filename)
+            _append_edge(
+                edges,
+                seen_edges,
+                source=source,
+                target=target,
+                relation=relation,
+                chunk=chunk,
+                evidence_doc_id=doc_id,
             )
 
     if not nodes or not edges:
@@ -71,6 +97,42 @@ def build_concept_map(chunks: list[Chunk], output_dir: str | None = None) -> dic
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8")
     return graph
+
+
+def _append_edge(
+    edges: list[dict],
+    seen_edges: set[tuple[str, str, str, str | None, str]],
+    source: str,
+    target: str,
+    relation: str,
+    chunk: Chunk,
+    evidence_doc_id: str | None,
+) -> None:
+    key = (source, target, relation, evidence_doc_id, chunk.chunk_id)
+    if key in seen_edges:
+        return
+    seen_edges.add(key)
+    edges.append(
+        {
+            "source": source,
+            "target": target,
+            "relation": relation,
+            "evidence": [source_ref.to_dict() for source_ref in _sources_from_chunks([chunk])],
+        }
+    )
+
+
+def _document_node_id(doc_id: str | None, filename: str | None) -> str | None:
+    value = doc_id or filename
+    return f"doc:{value}" if value else None
+
+
+def _add_document_to_node(node: dict, doc_id: str | None, filename: str | None) -> None:
+    if "documents" not in node:
+        return
+    value = {key: item for key, item in {"doc_id": doc_id, "filename": filename}.items() if item}
+    if value and value not in node["documents"]:
+        node["documents"].append(value)
 
 
 def _concepts_from_text(text: str) -> list[str]:
@@ -86,7 +148,6 @@ def _concepts_from_text(text: str) -> list[str]:
 
 def _edges_from_concepts(concepts: list[str]) -> list[tuple[str, str, str]]:
     edges: list[tuple[str, str, str]] = []
-    concept_set = set(concepts)
     for source in concepts:
         hinted = RELATION_HINTS.get(source)
         if hinted:

@@ -1,4 +1,4 @@
-# Workflow
+﻿# Workflow
 
 BeePDF v2 uses a LangGraph-style state machine. The first implementation can run as plain local functions, while preserving node boundaries that can later become queue workers.
 
@@ -57,3 +57,8 @@ Each node appends structured errors:
   "retryable": true
 }
 ```
+
+## Citation Check
+
+`citation_check_node` and Course Pack summary refinement use source-term overlap validation. API-generated text is accepted only when it is grounded in the retrieved chunks; otherwise the workflow records warnings and falls back to rule-based source-grounded output.
+

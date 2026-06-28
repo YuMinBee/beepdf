@@ -1,4 +1,4 @@
-# v1 Legacy PDF-to-Audio
+﻿# v1 Legacy PDF-to-Audio
 
 v1 is the original BeePDF service direction.
 
@@ -15,10 +15,10 @@ single PDF
 
 ## Main Files
 
-- `app/main.py`: legacy FastAPI application
-- `db/`: request and processing metadata schema
-- `infra/`: NCP/cloud deployment notes
-- `web/`: original web/static assets
+- `v1/app/main.py`: legacy FastAPI application
+- `v1/db/`: request and processing metadata schema
+- `v1/infra/`: NCP/cloud deployment notes
+- `v1/web/`: original web/static assets
 
 ## Main Value
 
@@ -44,3 +44,4 @@ v2 does not replace v1 line by line. It upgrades the service value from a single
 v1: PDF 1개 -> 대본/오디오
 v2: 여러 강의자료 -> Course Pack -> Q&A / Study Kit / Audio Script / Concept Map
 ```
+

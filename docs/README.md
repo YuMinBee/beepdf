@@ -1,4 +1,4 @@
-# docs
+﻿# docs
 
 Documentation is split by purpose:
 

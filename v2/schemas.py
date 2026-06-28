@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -32,9 +32,11 @@ class Chunk:
 class SourceRef:
     page: int
     chunk_id: str
+    doc_id: str | None = None
+    filename: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {key: value for key, value in asdict(self).items() if value is not None}
 
 
 @dataclass(slots=True)
@@ -83,6 +85,8 @@ class SourceGroundedAnswer:
 class VectorSource:
     page: int
     chunk_id: str
+    doc_id: str | None = None
+    filename: str | None = None
     score: float | None = None
 
 
@@ -130,3 +134,4 @@ class DocumentIngestResult:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+

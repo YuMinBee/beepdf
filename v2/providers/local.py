@@ -1,9 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 
-from v2.ingest import _parse_pdf, _parse_text_document
+from v2.ingest import _parse_pdf, _parse_pptx, _parse_text_document
 from v2.providers.mock import LocalStorageProvider, MockLLMProvider, MockTTSProvider
+from v2.providers.openai import OpenAIProvider, OpenAIProviderError
 from v2.providers.ocr import LocalTesseractOCRProvider, MockOCRProvider
 from v2.rag.retrieval import chunks_from_contexts, retrieve_contexts
 from v2.schemas import Chunk, PageMarkdown
@@ -16,6 +17,8 @@ class LocalParserProvider:
         extension = source_path.suffix.lower()
         if extension == ".pdf":
             return _parse_pdf(source_path, warnings)
+        if extension == ".pptx":
+            return _parse_pptx(source_path, warnings)
         if extension in {".txt", ".md"}:
             return _parse_text_document(source_path, warnings, parser=extension.lstrip("."))
         return []
@@ -40,4 +43,6 @@ __all__ = [
     "LocalParserProvider",
     "SimpleRetriever",
     "LocalIndexProvider",
+    "OpenAIProviderError",
+    "OpenAIProvider",
 ]

@@ -1,4 +1,4 @@
-# BeePDF
+﻿# BeePDF
 
 BeePDF는 두 단계로 발전한 PDF 기반 학습/음성화 프로젝트입니다.
 
@@ -11,14 +11,14 @@ BeePDF는 두 단계로 발전한 PDF 기반 학습/음성화 프로젝트입니
 
 | Version | Purpose | Main files | Run target |
 | --- | --- | --- | --- |
-| v1 Legacy | PDF -> script -> TTS -> Object Storage | `app/main.py`, `db/`, `infra/`, `web/` | `uvicorn app.main:app` |
+| v1 Legacy | PDF -> script -> TTS -> Object Storage | `v1/` | `uvicorn v1.app.main:app` |
 | v2 Local Demo | Course Pack RAG, Study Kit, Audio Script, Concept Map | `v2/`, `v2/main.py`, `requirements-v2.txt`, `tests/` | `uvicorn v2.main:app --reload --port 8000` |
 
 ## Repository Structure
 
 ```text
-app/                  v1 legacy FastAPI service
-  main.py             v1 cloud PDF-to-audio entrypoint
+v1/                   v1 legacy PDF-to-audio package
+  app/main.py         v1 cloud PDF-to-audio entrypoint
 v2/                   v2 local Course Pack Document AI package
   main.py             v2 FastAPI demo entrypoint
   api/                v2 request/response routes
@@ -46,7 +46,7 @@ Open:
 http://127.0.0.1:8000/docs
 ```
 
-Expected v2 endpoints:
+Expected v2 document endpoints:
 
 - `POST /v2/documents/ingest`
 - `GET /v2/documents/{doc_id}`
@@ -55,13 +55,27 @@ Expected v2 endpoints:
 - `POST /v2/audio-script`
 - `POST /v2/concept-map`
 
+Expected v2 Course Pack endpoints:
+
+- `POST /v2/course-packs`
+- `GET /v2/course-packs/{pack_id}`
+- `GET /v2/course-packs/{pack_id}/artifacts`
+- `POST /v2/course-packs/ask`
+- `POST /v2/course-packs/study-kit`
+- `POST /v2/course-packs/summary`
+- `POST /v2/course-packs/audio-script`
+- `POST /v2/course-packs/concept-map`
+- `POST /v2/course-packs/concept-map/export`
+
 ## v2 Positioning
 
-BeePDF v2는 PDF 문서를 page-level RAG와 GraphRAG-lite로 구조화하고, 요약, Q&A, Study Kit, 음성 대본 생성을 source-grounded 방식으로 제공하는 cloud-ready Document AI 플랫폼입니다.
+BeePDF v2는 PDF/PPTX 강의자료를 page 또는 slide-level RAG와 GraphRAG-lite로 구조화하고, 요약, Q&A, Study Kit, 음성 대본 생성을 source-grounded 방식으로 제공하는 cloud-ready Document AI 플랫폼입니다.
 
 기본 구현은 비용 없이 재현 가능한 local provider를 사용합니다. 다만 `StorageProvider`, `ParserProvider`, `OCRProvider`, `LLMProvider`, `TTSProvider`, `IndexProvider`를 분리해 향후 Object Storage, managed OCR, 외부 LLM API, managed vector DB로 교체할 수 있게 설계했습니다.
 
 ## v2 Output Artifacts
+
+Single document artifacts:
 
 ```text
 outputs/{doc_id}/
@@ -74,10 +88,30 @@ outputs/{doc_id}/
 - audio_script.json
 ```
 
+Course Pack artifacts:
+
+```text
+outputs/course_packs/{pack_id}/
+- course_pack.json
+- chunks.json
+- graph.json
+- answers/
+- summary.json
+- study_kit.json
+- audio_script.json
+- concept_map.mmd
+- concept_map.html
+```
+
+`/v2/course-packs/{pack_id}/artifacts` previews generated outputs in one response, and `/v2/course-packs/concept-map/export` writes Mermaid/HTML concept map artifacts for portfolio review.
+
+Course Pack sources include `doc_id`, `filename`, `page`, and `chunk_id` so answers and study assets can cite the exact lecture file and page-level chunk. Overview-style Course Pack questions balance retrieval across documents so a multi-lecture summary does not collapse into one file only. `/v2/course-packs/summary` can run in free mock/rule mode or optionally refine the overview through `OpenAIProvider` when `OPENAI_API_KEY` is configured. API-refined text must pass `citation_check`; otherwise BeePDF falls back to the rule-based source-grounded summary.
+
 ## Docs
 
 - [v1 Legacy Overview](docs/V1_LEGACY.md)
 - [v2 Upgrade Summary](docs/V2_UPGRADE_SUMMARY.md)
+- [Course Pack Demo](docs/COURSE_PACK_DEMO.md)
 - [Repository Structure](docs/REPOSITORY_STRUCTURE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Providers](docs/PROVIDERS.md)
@@ -91,4 +125,14 @@ outputs/{doc_id}/
 python -m unittest discover -s tests
 ```
 
-The current test suite focuses on v2 local demo behavior: ingest, chunk source preservation, source-grounded ask, Study Kit, Audio Script, concept map, OCR fallback, provider interfaces, and FastAPI route registration.
+The current test suite focuses on v2 local demo behavior: ingest, chunk source preservation, source-grounded ask, Course Pack balanced overview retrieval, OpenAIProvider fallback behavior, citation_check, Course Pack Summary, Study Kit, Audio Script, artifact preview, Mermaid/HTML concept map export, concept map, OCR fallback, provider interfaces, and FastAPI route registration.
+
+
+
+
+
+
+
+
+
+

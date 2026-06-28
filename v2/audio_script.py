@@ -1,6 +1,6 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from v2.rag.answering import _sources_from_chunks
+from v2.rag.answering import _best_sentence, _keyword_terms, _source_label, _sources_from_chunks
 from v2.schemas import Chunk
 
 SUPPORTED_AUDIO_MODES = {"brief_1min", "briefing_3min", "lecture", "podcast"}
@@ -44,9 +44,9 @@ def generate_audio_script(chunks: list[Chunk], mode: str = "briefing_3min") -> d
 
 def _single_speaker_script(chunks: list[Chunk], mode: str) -> list[dict]:
     opening = {
-        "brief_1min": "Here is a one-minute source-grounded brief.",
-        "briefing_3min": "Here is a three-minute briefing based on the document sources.",
-        "lecture": "This lecture-style script walks through the cited document evidence.",
+        "brief_1min": "지금부터 문서 근거에 기반한 1분 핵심 브리핑을 시작합니다.",
+        "briefing_3min": "지금부터 검색된 문서 출처를 기준으로 3분 브리핑을 진행합니다.",
+        "lecture": "이 강의형 대본은 각 페이지의 근거를 따라 핵심 개념을 차례대로 설명합니다.",
     }[mode]
     script = [
         {
@@ -59,7 +59,7 @@ def _single_speaker_script(chunks: list[Chunk], mode: str) -> list[dict]:
         script.append(
             {
                 "speaker": "narrator",
-                "text": f"On page {chunk.page}, the document says: {_clean_text(chunk.text)}",
+                "text": f"{_source_label(chunk)}의 근거를 보면, {_script_sentence(chunk)}",
                 "sources": [source.to_dict() for source in _sources_from_chunks([chunk])],
             }
         )
@@ -69,17 +69,22 @@ def _single_speaker_script(chunks: list[Chunk], mode: str) -> list[dict]:
 def _podcast_script(chunks: list[Chunk]) -> list[dict]:
     script: list[dict] = []
     for index, chunk in enumerate(chunks, start=1):
-        speaker = "host" if index % 2 else "guest"
-        prefix = "Let's look at" if speaker == "host" else "The source supports this with"
+        if index % 2:
+            speaker = "host"
+            text = f"이번 근거는 {_source_label(chunk)}입니다. 핵심 문장은 '{_script_sentence(chunk)}'입니다."
+        else:
+            speaker = "guest"
+            text = f"네, 이 출처는 질문과 관련해 '{_script_sentence(chunk)}'라는 내용을 뒷받침합니다."
         script.append(
             {
                 "speaker": speaker,
-                "text": f"{prefix} page {chunk.page}: {_clean_text(chunk.text)}",
+                "text": text,
                 "sources": [source.to_dict() for source in _sources_from_chunks([chunk])],
             }
         )
     return script
 
 
-def _clean_text(text: str) -> str:
-    return " ".join(text.split())[:320]
+def _script_sentence(chunk: Chunk) -> str:
+    terms = _keyword_terms(chunk.text)
+    return _best_sentence(chunk.text, terms)[:320]

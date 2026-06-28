@@ -1,4 +1,4 @@
-# BeePDF v2 optional dependencies
+﻿# BeePDF v2 optional dependencies
 # Install only when running the real local API or optional local pipeline.
 fastapi>=0.111
 uvicorn>=0.30
@@ -23,3 +23,6 @@ pytesseract>=0.3.13
 # faiss-cpu
 # chromadb
 # langgraph
+
+# Optional OpenAIProvider uses the standard library HTTP client; no OpenAI SDK is required.
+

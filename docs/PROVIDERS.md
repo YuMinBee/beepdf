@@ -1,4 +1,4 @@
-# Providers
+﻿# Providers
 
 BeePDF v2 separates infrastructure concerns behind provider interfaces. Local implementations are used by default, while cloud services can be added without rewriting the workflow.
 
@@ -67,16 +67,17 @@ The local Tesseract provider is a working CPU-based fallback for demo and tests.
 Local demo:
 
 - `MockLLMProvider`
+- `OpenAIProvider` when `OPENAI_API_KEY` is configured
 
 Future replacements:
 
 - `OllamaProvider`
-- `OpenAIProvider`
+- OpenAI-compatible managed LLM provider
 - `ClovaStudioProvider`
 
 Responsibilities:
 
-- Generate summaries.
+- Generate source-grounded summaries and optional API-refined Course Pack overviews.
 - Answer questions with context.
 - Extract entities and relations.
 - Generate study kits and audio scripts.
@@ -126,10 +127,12 @@ Every provider should return serializable data. This keeps workflow state portab
 LocalStorageProvider -> ObjectStorageProvider
 LocalParserProvider -> OCR/parser worker
 MockOCRProvider/LocalTesseractOCRProvider -> ClovaOCRProvider/managed OCR
-MockLLMProvider -> ClovaStudioProvider/OpenAIProvider/OllamaProvider
+MockLLMProvider -> OpenAIProvider/ClovaStudioProvider/OllamaProvider
 MockTTSProvider -> ClovaVoiceProvider/LocalTTSProvider
 LocalIndexProvider -> ManagedVectorDBProvider
 In-process workflow -> Queue-based worker execution
 ```
+
+
 
 

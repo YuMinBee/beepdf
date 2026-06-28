@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 
@@ -27,28 +27,142 @@ def generate_source_grounded_answer(
 
 
 def _compose_grounded_answer(query: str, chunks: list[Chunk]) -> str:
-    sentences: list[str] = []
-    for chunk in chunks:
-        sentences.extend(_split_sentences(chunk.text))
-    selected = sentences[:3] or [chunk.text.strip() for chunk in chunks if chunk.text.strip()]
-    evidence = " ".join(selected).strip()
-    if not evidence:
+    evidence_items = _evidence_items(query, chunks, limit=4)
+    if not evidence_items:
         return ""
-    return f"Based on the retrieved source chunks, {evidence}"
+
+    heading = "검색된 문서 근거만 기준으로 정리하면 다음과 같습니다."
+    bullets = [f"- {label}: {sentence}" for label, sentence in evidence_items]
+    source_hint = _source_hint(chunks[: len(evidence_items)])
+    if source_hint:
+        return "\n".join([heading, *bullets, f"근거 위치: {source_hint}"])
+    return "\n".join([heading, *bullets])
+
+
+def _evidence_items(query: str, chunks: list[Chunk], limit: int = 4) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    seen_sentences: set[str] = set()
+    query_terms = _keyword_terms(query)
+    for chunk in chunks:
+        sentence = _best_sentence(chunk.text, query_terms)
+        if not sentence or sentence in seen_sentences:
+            continue
+        items.append((_source_label(chunk), sentence))
+        seen_sentences.add(sentence)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _best_sentence(text: str, query_terms: list[str]) -> str:
+    fragments = [_clean_text(part, max_chars=180) for part in _split_sentences(text)]
+    fragments = [fragment for fragment in fragments if fragment]
+    if not fragments:
+        return ""
+
+    candidates = _merge_nearby_fragments(fragments)
+    if not query_terms:
+        return candidates[0]
+
+    def score(sentence: str) -> tuple[float, int]:
+        lowered = sentence.lower()
+        hits = sum(1 for term in query_terms if term in lowered)
+        has_hangul = any("가" <= char <= "힣" for char in sentence)
+        quality = 0.0
+        if has_hangul:
+            quality += 2.0
+        if len(sentence) >= 35:
+            quality += 2.0
+        if len(sentence) < 20:
+            quality -= 2.0
+        if sentence.endswith((".", "다", "다.", "요", "요.")):
+            quality += 0.5
+        return hits + quality, min(len(sentence), 500)
+
+    best = max(candidates, key=score)
+    return best if score(best)[0] > 0 else candidates[0]
+
+
+def _merge_nearby_fragments(fragments: list[str]) -> list[str]:
+    candidates: list[str] = []
+    for index in range(len(fragments)):
+        merged = " ".join(fragments[index : index + 6]).strip()
+        if merged:
+            candidates.append(_clean_text(merged))
+    candidates.extend(fragments)
+    return candidates
+
+
+def _source_hint(chunks: list[Chunk]) -> str:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        label = _source_label(chunk)
+        if label in seen:
+            continue
+        labels.append(label)
+        seen.add(label)
+    return ", ".join(labels)
+
+
+def _source_label(chunk: Chunk) -> str:
+    filename = chunk.metadata.get("filename") if chunk.metadata else None
+    base = filename or "문서"
+    return f"{base} {chunk.page}페이지/{chunk.chunk_id}"
 
 
 def _sources_from_chunks(chunks: list[Chunk]) -> list[SourceRef]:
     sources: list[SourceRef] = []
-    seen: set[tuple[int, str]] = set()
+    seen: set[tuple[str | None, str | None, int, str]] = set()
     for chunk in chunks:
-        key = (chunk.page, chunk.chunk_id)
+        doc_id = chunk.metadata.get("doc_id") if chunk.metadata else None
+        filename = chunk.metadata.get("filename") if chunk.metadata else None
+        key = (doc_id, filename, chunk.page, chunk.chunk_id)
         if key in seen:
             continue
-        sources.append(SourceRef(page=chunk.page, chunk_id=chunk.chunk_id))
+        sources.append(SourceRef(page=chunk.page, chunk_id=chunk.chunk_id, doc_id=doc_id, filename=filename))
         seen.add(key)
     return sources
 
 
 def _split_sentences(text: str) -> list[str]:
-    parts = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
+    parts = re.split(r"(?<=[.!?。！？])\s+|\n+|(?<=다\.)\s*", text.strip())
     return [part.strip() for part in parts if part.strip()]
+
+
+def _clean_text(text: str, max_chars: int = 260) -> str:
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 1].rstrip() + "..."
+
+
+def _keyword_terms(text: str) -> list[str]:
+    tokens = re.findall(r"[A-Za-z0-9가-힣_-]{2,}", text.lower())
+    stopwords = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "this",
+        "that",
+        "from",
+        "document",
+        "source",
+        "이",
+        "그",
+        "저",
+        "내용",
+        "핵심",
+        "설명",
+        "정리",
+        "자료",
+    }
+    terms: list[str] = []
+    for token in tokens:
+        if token in stopwords or token in terms:
+            continue
+        terms.append(token)
+    return terms
+
+
