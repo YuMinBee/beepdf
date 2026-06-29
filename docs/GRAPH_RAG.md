@@ -1,50 +1,67 @@
-# GraphRAG-lite
+﻿# GraphRAG-lite / Course Graph Retrieval
 
-BeePDF v2 uses GraphRAG-lite to capture practical relationships inside a PDF without requiring the full Microsoft GraphRAG stack.
+CourseBee v2 uses GraphRAG-lite as a lightweight graph-augmented retrieval layer over a Course Pack. It is not full Microsoft GraphRAG. The graph is built from course structure nodes and evidence-backed concept relations that can be used during retrieval.
 
-## Pipeline
-
-```text
-chunk
--> entity extraction
--> relation extraction
--> NetworkX graph
--> entity neighbor retrieval
--> vector result + graph context
-```
-
-## Example Relations
+## Graph Shape
 
 ```text
-sha256 cache -> reduces -> repeated processing cost
-request_id -> enables -> failure tracking
-OCR fallback -> handles -> scanned PDFs
-Object Storage -> stores -> generated MP3
+Document Node
+-> Lecture Node
+-> Page Node
+-> Chunk Node
+-> Concept Node
 ```
+
+Representative relation types:
+
+```text
+document -> contains -> lecture
+lecture -> contains -> page
+page -> contains -> chunk
+chunk -> mentions -> concept
+lecture -> introduces -> concept
+concept -> prerequisite_of -> concept
+concept -> explains -> concept
+concept -> contrasts -> concept
+concept -> used_in -> concept
+concept -> evidence_in -> chunk
+```
+
+## Retrieval Modes
+
+`local_graph` starts by matching entities in the question, then chooses a lightweight traversal strategy.
+
+| Question shape | Strategy | Example |
+| --- | --- | --- |
+| Direct relation | `edge` | `BPE와 OOV는 어떤 관계야?` |
+| Prior knowledge | `prerequisite` | `BPE를 이해하려면 먼저 뭘 알아야 해?` |
+| Concept connection | `path` | `RNN, LSTM, CNN은 NLP pipeline에서 어떻게 연결돼?` |
+| Comparison | `contrast` | `RNN과 CNN은 뭐가 달라?` |
 
 ## Query Output
 
 ```json
 {
-  "answer": "BeePDF의 비용 절감은 OCR 호출 최소화와 sha256 캐시를 중심으로 설계됩니다.",
-  "vector_sources": [
-    {"page": 3, "chunk_id": "p3_c2"}
+  "mode": "local_graph",
+  "retrieval_mode": "course_graph_path",
+  "matched_entities": ["BPE"],
+  "traversal_strategy": "prerequisite",
+  "graph_paths": [
+    {
+      "nodes": ["subword tokenization", "BPE"],
+      "edges": [{"relation": "prerequisite_of"}]
+    }
   ],
-  "graph_context": [
-    ["sha256 cache", "reduces", "repeated processing cost"],
-    ["OCR fallback", "handles", "scanned PDFs"]
+  "evidence_chunks": [
+    {
+      "filename": "자연어처리_11주차_1차시.pptx",
+      "page": 3,
+      "chunk_id": "p3_c1"
+    }
   ]
 }
 ```
 
-## Retrieval Strategy
+## Why This Is Still GraphRAG-lite
 
-1. Run vector search to find source chunks.
-2. Extract candidate entities from the question and retrieved chunks.
-3. Expand one-hop neighbors in the graph.
-4. Pass both the vector context and graph triples to the answer generator.
-5. Return citations from vector chunks and relation triples from the graph.
-
-## Portfolio Value
-
-The design shows that GraphRAG is applied because PDFs contain concepts and operational relationships, not because graph retrieval is fashionable.
+The implementation intentionally avoids claiming a full GraphRAG stack. It does not perform global community detection, graph summarization, or large-scale entity resolution. Instead, it provides a practical Course Pack retrieval layer where structure and concept paths help select evidence chunks before answer generation.

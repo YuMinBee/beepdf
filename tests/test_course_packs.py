@@ -150,6 +150,195 @@ class CoursePackBehaviorTest(unittest.TestCase):
         self.assertTrue(response["graph_context"])
         self.assertTrue(any(edge["source"] == "BPE" and edge["target"] == "OOV" for edge in response["graph_context"]))
         self.assertTrue(response["graph_context"][0]["evidence"])
+    def test_v2_course_pack_local_graph_returns_prerequisite_path(self) -> None:
+        root = self._case_dir()
+        first = root / "자연어처리_11주차_1차시.txt"
+        first.write_text(
+            "Tokenizer and subword tokenization are prerequisites for BPE. BPE reduces OOV.",
+            encoding="utf-8",
+        )
+        pack = routes.ingest_course_pack(
+            CoursePackIngestRequest(
+                paths=[str(first)],
+                output_root=str(root / "outputs"),
+                max_chunk_chars=180,
+            )
+        )
+
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="BPE를 이해하려면 먼저 뭘 알아야 해?",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="local_graph",
+            )
+        )
+
+        self.assertEqual(response["mode"], "local_graph")
+        self.assertEqual(response["retrieval_mode"], "course_graph_path")
+        self.assertEqual(response["traversal_strategy"], "prerequisite")
+        self.assertIn("BPE", response["matched_entities"])
+        self.assertTrue(response["graph_paths"])
+        self.assertTrue(response["evidence_chunks"])
+        self.assertTrue(
+            any(
+                edge["relation"] == "prerequisite_of" and edge["target"] == "BPE"
+                for edge in response["graph_context"]
+            )
+        )
+
+    def test_v2_course_pack_local_graph_returns_pipeline_paths(self) -> None:
+        root = self._case_dir()
+        first = root / "자연어처리_11주차_2차시.txt"
+        first.write_text(
+            "RNN handles sequence data in the NLP pipeline. "
+            "LSTM improves RNN long-term dependency. "
+            "CNN captures local pattern for text classification in the NLP pipeline.",
+            encoding="utf-8",
+        )
+        pack = routes.ingest_course_pack(
+            CoursePackIngestRequest(
+                paths=[str(first)],
+                output_root=str(root / "outputs"),
+                max_chunk_chars=260,
+            )
+        )
+
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="RNN, LSTM, CNN은 NLP pipeline에서 어떻게 연결돼?",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="local_graph",
+            )
+        )
+
+        self.assertEqual(response["retrieval_mode"], "course_graph_path")
+        self.assertEqual(response["traversal_strategy"], "path")
+        self.assertTrue({"RNN", "LSTM", "CNN"}.issubset(set(response["matched_entities"])))
+        self.assertTrue(response["graph_paths"])
+        self.assertTrue(any(edge["relation"] == "used_in" for edge in response["graph_context"]))
+    def test_v2_course_pack_auto_router_selects_vector_for_fact_question(self) -> None:
+        pack, root = self._create_pack()
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="OCR 정의가 뭐야?",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="auto",
+            )
+        )
+
+        self.assertEqual(response["mode"], "auto")
+        self.assertEqual(response["question_type"], "fact_question")
+        self.assertEqual(response["routed_mode"], "vector")
+        self.assertEqual(response["retrieval_mode"], "vector")
+        self.assertIn("vector", response["selected_retrievers"])
+        self.assertTrue(response["retrieval_plan"])
+
+    def test_v2_course_pack_auto_router_selects_graph_for_relation_question(self) -> None:
+        root = self._case_dir()
+        first = root / "자연어처리_11주차_1차시.txt"
+        first.write_text("BPE reduces OOV through subword tokenization.", encoding="utf-8")
+        pack = routes.ingest_course_pack(
+            CoursePackIngestRequest(paths=[str(first)], output_root=str(root / "outputs"), max_chunk_chars=120)
+        )
+
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="BPE와 OOV는 어떤 관계야?",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="auto",
+            )
+        )
+
+        self.assertEqual(response["mode"], "auto")
+        self.assertEqual(response["question_type"], "relation_question")
+        self.assertEqual(response["routed_mode"], "local_graph")
+        self.assertEqual(response["retrieval_mode"], "local_graph")
+        self.assertIn("course_graph", response["selected_retrievers"])
+        self.assertTrue(response["graph_context"])
+
+    def test_v2_course_pack_auto_router_selects_hierarchical_for_overview_question(self) -> None:
+        pack, root = self._create_pack()
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="course pack 전체 흐름 요약해줘",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="auto",
+            )
+        )
+
+        self.assertEqual(response["mode"], "auto")
+        self.assertEqual(response["question_type"], "overview_question")
+        self.assertEqual(response["routed_mode"], "hierarchical")
+        self.assertEqual(response["retrieval_mode"], "hierarchical_summary")
+        self.assertIn("hierarchical_summary", response["selected_retrievers"])
+        self.assertTrue(response["selected_summary_nodes"])
+
+    def test_v2_course_pack_auto_router_selects_prerequisite_graph_for_learning_path(self) -> None:
+        root = self._case_dir()
+        first = root / "자연어처리_11주차_1차시.txt"
+        first.write_text(
+            "Tokenizer and subword tokenization are prerequisites for BPE. BPE reduces OOV.",
+            encoding="utf-8",
+        )
+        pack = routes.ingest_course_pack(
+            CoursePackIngestRequest(paths=[str(first)], output_root=str(root / "outputs"), max_chunk_chars=180)
+        )
+
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="BPE를 이해하려면 먼저 뭘 알아야 해?",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="auto",
+            )
+        )
+
+        self.assertEqual(response["mode"], "auto")
+        self.assertEqual(response["question_type"], "learning_path_question")
+        self.assertEqual(response["routed_mode"], "local_graph")
+        self.assertEqual(response["traversal_strategy"], "prerequisite")
+        self.assertTrue(response["graph_paths"])
+    def test_v2_course_pack_writes_hierarchical_summary_index(self) -> None:
+        pack, _ = self._create_pack()
+        index_path = Path(pack["output_dir"]) / "hierarchical_summary_index.json"
+        self.assertTrue(index_path.exists())
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        self.assertEqual(index["root_id"], "course_pack_summary")
+        node_types = {node["type"] for node in index["nodes"]}
+        self.assertIn("course_pack_summary", node_types)
+        self.assertIn("lecture_summary", node_types)
+        self.assertIn("chunk_summary", node_types)
+
+    def test_v2_course_pack_ask_hierarchical_summary_uses_overview_level(self) -> None:
+        pack, root = self._create_pack()
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="11주차 전체 흐름 설명해줘",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="hierarchical",
+            )
+        )
+
+        self.assertEqual(response["mode"], "hierarchical")
+        self.assertEqual(response["retrieval_mode"], "hierarchical_summary")
+        self.assertEqual(response["abstraction_level"], "course_pack")
+        self.assertTrue(response["selected_summary_nodes"])
+        self.assertTrue(any(node["type"] == "course_pack_summary" for node in response["selected_summary_nodes"]))
+        self.assertTrue(response["supporting_chunks"])
+        self.assertGreater(response["hierarchical_summary_index"]["node_count"], 0)
     def test_v2_course_pack_overview_query_balances_document_sources(self) -> None:
         pack, root = self._create_pack()
         response = routes.ask_course_pack(
@@ -381,5 +570,8 @@ class CoursePackBehaviorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
 
 

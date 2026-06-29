@@ -13,10 +13,12 @@ from v2.background_knowledge import BACKGROUND_SCOPE_VALUES, background_chunks_f
 from v2.course_summary import generate_course_pack_summary
 from v2.documents import chunk_from_dict, load_chunks
 from v2.graph.concept_map import build_concept_map
+from v2.hierarchical_retrieval import build_hierarchical_summary_index, retrieve_hierarchical_summary
 from v2.ingest import ingest_local_document
 from v2.providers.local import MockLLMProvider
-from v2.rag.answering import generate_source_grounded_answer
+from v2.rag.answering import _sources_from_chunks, generate_source_grounded_answer
 from v2.rag.retrieval import chunks_from_contexts, retrieve_contexts
+from v2.retrieval_router import classify_course_pack_question
 from v2.schemas import Chunk
 from v2.study_kit import generate_study_kit
 
@@ -79,6 +81,7 @@ def create_course_pack(
     _write_json(output_dir / "course_pack.json", response)
     _write_json(output_dir / "chunks.json", {"chunks": [asdict(chunk) for chunk in chunks]})
     build_concept_map(chunks, output_dir=str(output_dir))
+    _write_json(output_dir / "hierarchical_summary_index.json", build_hierarchical_summary_index(chunks, safe_pack_id))
     _write_json(output_dir / "summary.json", {})
     _write_json(output_dir / "study_kit.json", {})
     _write_json(output_dir / "audio_script.json", {})
@@ -104,20 +107,14 @@ def load_course_pack_chunks(pack_id: str, output_root: str = "outputs") -> list[
 
 
 def ask_course_pack(pack_id: str, question: str, output_root: str = "outputs", top_k: int = 4, mode: str = "vector") -> dict:
-    if mode == "local_graph":
+    if mode in {"auto", "router", "dual", "lightrag", "lightrag_dual"}:
+        payload = _ask_course_pack_with_router(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+    elif mode == "local_graph":
         payload = _ask_course_pack_with_graph(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+    elif mode in {"hierarchical", "hierarchical_summary"}:
+        payload = _ask_course_pack_with_hierarchical_summary(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
     else:
-        chunks = select_balanced_course_pack_chunks(pack_id, query=question, output_root=output_root, top_k=top_k)
-        result = generate_source_grounded_answer(
-            query=question,
-            chunks=chunks,
-            index_provider=_PreselectedIndexProvider(),
-            llm_provider=MockLLMProvider(),
-            top_k=top_k,
-        )
-        payload = result.to_dict()
-        payload["mode"] = mode
-        payload["retrieval_mode"] = "vector"
+        payload = _ask_course_pack_with_vector(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, mode=mode)
     _save_pack_artifact(pack_id, output_root, f"answers/{_artifact_name(question)}.json", payload)
     return payload
 
@@ -226,6 +223,7 @@ def artifacts_for_course_pack(
         "chunks": "chunks.json",
         "concept_map_mermaid": "concept_map.mmd",
         "concept_map_html": "concept_map.html",
+        "hierarchical_summary_index": "hierarchical_summary_index.json",
     }
     artifacts = {
         name: _artifact_preview(output_dir / filename, include_content=include_content)
@@ -274,19 +272,104 @@ def select_balanced_course_pack_chunks(pack_id: str, query: str, output_root: st
 
 
 
+def _ask_course_pack_with_vector(pack_id: str, question: str, output_root: str, top_k: int, mode: str = "vector") -> dict:
+    chunks = select_balanced_course_pack_chunks(pack_id, query=question, output_root=output_root, top_k=top_k)
+    result = generate_source_grounded_answer(
+        query=question,
+        chunks=chunks,
+        index_provider=_PreselectedIndexProvider(),
+        llm_provider=MockLLMProvider(),
+        top_k=top_k,
+    )
+    payload = result.to_dict()
+    payload["mode"] = mode
+    payload["retrieval_mode"] = "vector"
+    return payload
+
+
+def _ask_course_pack_with_router(pack_id: str, question: str, output_root: str, top_k: int) -> dict:
+    route = classify_course_pack_question(question)
+    selected_mode = route["selected_mode"]
+    if selected_mode == "local_graph":
+        payload = _ask_course_pack_with_graph(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+    elif selected_mode == "hierarchical":
+        payload = _ask_course_pack_with_hierarchical_summary(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+    else:
+        payload = _ask_course_pack_with_vector(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+
+    payload["mode"] = "auto"
+    payload["routed_mode"] = selected_mode
+    payload["question_type"] = route["question_type"]
+    payload["retrieval_plan"] = route["retrieval_plan"]
+    payload["selected_retrievers"] = route["selected_retrievers"]
+    if route["question_type"] == "mixed_question":
+        payload["warnings"] = [
+            *payload.get("warnings", []),
+            "Mixed question routed to hierarchical summary first; course_graph is included in the retrieval plan for relationship follow-up.",
+        ]
+    return payload
+
+def _ask_course_pack_with_hierarchical_summary(pack_id: str, question: str, output_root: str, top_k: int) -> dict:
+    all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    retrieval = retrieve_hierarchical_summary(query=question, chunks=all_chunks, pack_id=pack_id, top_k=top_k)
+    chunks = retrieval.pop("chunks")
+
+    result = generate_source_grounded_answer(
+        query=question,
+        chunks=chunks,
+        index_provider=_PreselectedIndexProvider(),
+        llm_provider=MockLLMProvider(),
+        top_k=top_k,
+    )
+    payload = result.to_dict()
+    payload["mode"] = "hierarchical"
+    payload["retrieval_mode"] = "hierarchical_summary"
+    payload["abstraction_level"] = retrieval["abstraction_level"]
+    payload["selected_summary_nodes"] = retrieval["selected_summary_nodes"]
+    payload["supporting_chunks"] = retrieval["supporting_chunks"]
+    payload["hierarchical_summary_index"] = {
+        "root_id": retrieval["hierarchical_summary_index"].get("root_id"),
+        "node_count": len(retrieval["hierarchical_summary_index"].get("nodes", [])),
+    }
+    return payload
+
+COURSE_GRAPH_PATH_RELATIONS = {
+    "prerequisite_of",
+    "explains",
+    "contrasts",
+    "used_in",
+    "is_a",
+    "reduces",
+    "handles",
+    "improves",
+    "captures",
+    "supports",
+    "uses",
+    "extends",
+    "grounds",
+    "augments",
+    "builds",
+    "related_to",
+}
+PREREQUISITE_RELATIONS = {"prerequisite_of"}
+CONTRAST_RELATIONS = {"contrasts"}
+STRUCTURAL_RELATIONS = {"contains", "mentions", "evidence_in", "appears_in", "introduces"}
+
+
 def _ask_course_pack_with_graph(pack_id: str, question: str, output_root: str, top_k: int) -> dict:
     all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
     graph = _load_or_build_course_pack_graph(pack_id, output_root=output_root, chunks=all_chunks)
-    graph_edges = _select_graph_edges(question, graph)
+    graph_selection = _select_course_graph_context(question, graph)
+    graph_edges = graph_selection["graph_context"]
     graph_chunks = _chunks_from_graph_edges(graph_edges, all_chunks)
     warnings: list[str] = []
-    retrieval_mode = "local_graph"
+    retrieval_mode = "course_graph_path" if graph_selection["graph_paths"] else "local_graph"
 
     if graph_chunks:
         chunks = _dedupe_chunks(graph_chunks)[:top_k]
     else:
         retrieval_mode = "local_graph_fallback_vector"
-        warnings.append("No matching graph edge evidence was found. Falling back to balanced vector retrieval.")
+        warnings.append("No matching course graph evidence was found. Falling back to balanced vector retrieval.")
         chunks = _balanced_chunks(query=question, chunks=all_chunks, top_k=top_k)
 
     result = generate_source_grounded_answer(
@@ -300,6 +383,10 @@ def _ask_course_pack_with_graph(pack_id: str, question: str, output_root: str, t
     payload["mode"] = "local_graph"
     payload["retrieval_mode"] = retrieval_mode
     payload["graph_context"] = graph_edges
+    payload["matched_entities"] = graph_selection["matched_entities"]
+    payload["traversal_strategy"] = graph_selection["traversal_strategy"]
+    payload["graph_paths"] = graph_selection["graph_paths"]
+    payload["evidence_chunks"] = [source_ref.to_dict() for source_ref in _sources_from_chunks(chunks)]
     payload["warnings"] = [*payload.get("warnings", []), *warnings]
     return payload
 
@@ -309,30 +396,217 @@ def _load_or_build_course_pack_graph(pack_id: str, output_root: str, chunks: lis
     return build_concept_map(chunks, output_dir=str(output_dir))
 
 
-def _select_graph_edges(question: str, graph: dict) -> list[dict]:
-    entities = _query_entities(question, graph)
+def _select_course_graph_context(question: str, graph: dict) -> dict:
+    entities = sorted(_query_entities(question, graph))
+    strategy = _graph_traversal_strategy(question, entities)
+    graph_paths: list[dict] = []
+
     if not entities:
+        return {
+            "matched_entities": [],
+            "traversal_strategy": strategy,
+            "graph_context": [],
+            "graph_paths": [],
+        }
+
+    if strategy == "prerequisite":
+        graph_edges = _prerequisite_edges(entities, graph)
+        graph_paths = _direct_edge_paths(graph_edges)
+    elif strategy == "contrast":
+        graph_edges = _contrast_edges(entities, graph)
+        graph_paths = _direct_edge_paths(graph_edges)
+    elif strategy == "path":
+        graph_edges, graph_paths = _graph_paths_between_entities(entities, graph)
+        if not graph_edges:
+            graph_edges = _select_graph_edges(question, graph, entities=entities)
+    else:
+        graph_edges = _select_graph_edges(question, graph, entities=entities)
+
+    return {
+        "matched_entities": entities,
+        "traversal_strategy": strategy,
+        "graph_context": _dedupe_graph_edges(graph_edges),
+        "graph_paths": graph_paths,
+    }
+
+
+def _graph_traversal_strategy(question: str, entities: list[str]) -> str:
+    normalized = question.lower()
+    if any(term in normalized for term in ["먼저", "이해하려면", "선수", "기초", "prerequisite", "before"]):
+        return "prerequisite"
+    if any(term in normalized for term in ["차이", "비교", "대조", "contrast", "different"]):
+        return "contrast"
+    if len(entities) >= 2 and any(term in normalized for term in ["연결", "흐름", "pipeline", "path", "connect"]):
+        return "path"
+    return "edge"
+
+
+def _select_graph_edges(question: str, graph: dict, entities: list[str] | None = None) -> list[dict]:
+    target_entities = set(entities or _query_entities(question, graph))
+    if not target_entities:
         return []
     exact: list[dict] = []
     partial: list[dict] = []
     for edge in graph.get("edges", []):
+        relation = str(edge.get("relation", ""))
+        if relation in STRUCTURAL_RELATIONS:
+            continue
         source = str(edge.get("source", ""))
         target = str(edge.get("target", ""))
-        if source in entities and target in entities:
+        if source in target_entities and target in target_entities:
             exact.append(edge)
-        elif source in entities or target in entities:
+        elif source in target_entities or target in target_entities:
             partial.append(edge)
     return [*exact, *partial]
+
+
+def _prerequisite_edges(entities: list[str], graph: dict) -> list[dict]:
+    target_entities = set(entities)
+    edges: list[dict] = []
+    for edge in graph.get("edges", []):
+        if edge.get("relation") in PREREQUISITE_RELATIONS and edge.get("target") in target_entities:
+            edges.append(edge)
+    if edges:
+        return edges
+    for edge in graph.get("edges", []):
+        if edge.get("target") in target_entities and edge.get("relation") in {"is_a", "uses", "explains"}:
+            edges.append(edge)
+    return edges
+
+
+def _contrast_edges(entities: list[str], graph: dict) -> list[dict]:
+    target_entities = set(entities)
+    edges = [
+        edge
+        for edge in graph.get("edges", [])
+        if edge.get("relation") in CONTRAST_RELATIONS
+        and (edge.get("source") in target_entities or edge.get("target") in target_entities)
+    ]
+    return edges or _select_graph_edges(" ".join(entities), graph, entities=entities)
+
+
+def _graph_paths_between_entities(entities: list[str], graph: dict) -> tuple[list[dict], list[dict]]:
+    edges: list[dict] = []
+    paths: list[dict] = []
+    for index, source in enumerate(entities):
+        for target in entities[index + 1 :]:
+            steps = _find_shortest_graph_path(source, target, graph, max_depth=4)
+            if not steps:
+                continue
+            edges.extend(step[0] for step in steps)
+            paths.append(_graph_path_payload(steps))
+            if len(paths) >= 4:
+                return _dedupe_graph_edges(edges), paths
+    return _dedupe_graph_edges(edges), paths
+
+
+def _find_shortest_graph_path(source: str, target: str, graph: dict, max_depth: int = 4) -> list[tuple[dict, str, str, str]]:
+    adjacency: dict[str, list[tuple[str, dict, str]]] = {}
+    for edge in graph.get("edges", []):
+        relation = str(edge.get("relation", ""))
+        if relation not in COURSE_GRAPH_PATH_RELATIONS:
+            continue
+        left = str(edge.get("source", ""))
+        right = str(edge.get("target", ""))
+        if not left or not right:
+            continue
+        adjacency.setdefault(left, []).append((right, edge, "forward"))
+        adjacency.setdefault(right, []).append((left, edge, "reverse"))
+
+    queue: list[tuple[str, list[tuple[dict, str, str, str]]]] = [(source, [])]
+    visited = {source}
+    while queue:
+        current, path = queue.pop(0)
+        if len(path) >= max_depth:
+            continue
+        for neighbor, edge, direction in adjacency.get(current, []):
+            if neighbor in visited:
+                continue
+            next_path = [*path, (edge, direction, current, neighbor)]
+            if neighbor == target:
+                return next_path
+            visited.add(neighbor)
+            queue.append((neighbor, next_path))
+    return []
+
+
+def _graph_path_payload(steps: list[tuple[dict, str, str, str]]) -> dict:
+    if not steps:
+        return {"nodes": [], "edges": []}
+    nodes = [steps[0][2]]
+    edges: list[dict] = []
+    for edge, direction, _current, neighbor in steps:
+        nodes.append(neighbor)
+        edges.append(
+            {
+                "source": edge.get("source"),
+                "target": edge.get("target"),
+                "relation": edge.get("relation"),
+                "direction": direction,
+                "evidence": edge.get("evidence", []),
+            }
+        )
+    return {"nodes": nodes, "edges": edges, "description": _graph_path_description(nodes, edges)}
+
+
+def _graph_path_description(nodes: list[str], edges: list[dict]) -> str:
+    if not nodes:
+        return ""
+    parts = [nodes[0]]
+    for index, edge in enumerate(edges):
+        relation = str(edge.get("relation") or "related_to")
+        arrow = f"--{relation}-->" if edge.get("direction") == "forward" else f"<--{relation}--"
+        parts.extend([arrow, nodes[index + 1]])
+    return " ".join(parts)
+
+
+def _direct_edge_paths(edges: list[dict]) -> list[dict]:
+    paths: list[dict] = []
+    for edge in _dedupe_graph_edges(edges):
+        paths.append(
+            {
+                "nodes": [edge.get("source"), edge.get("target")],
+                "edges": [
+                    {
+                        "source": edge.get("source"),
+                        "target": edge.get("target"),
+                        "relation": edge.get("relation"),
+                        "direction": "forward",
+                        "evidence": edge.get("evidence", []),
+                    }
+                ],
+                "description": f"{edge.get('source')} --{edge.get('relation')}--> {edge.get('target')}",
+            }
+        )
+    return paths
+
+
+def _dedupe_graph_edges(edges: list[dict]) -> list[dict]:
+    deduped: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for edge in edges:
+        evidence = (edge.get("evidence") or [{}])[0]
+        key = (
+            str(edge.get("source", "")),
+            str(edge.get("target", "")),
+            str(edge.get("relation", "")),
+            str(evidence.get("chunk_id", "")),
+        )
+        if key in seen:
+            continue
+        deduped.append(edge)
+        seen.add(key)
+    return deduped
 
 
 def _query_entities(question: str, graph: dict) -> set[str]:
     normalized = question.lower()
     entities: set[str] = set()
     for node in graph.get("nodes", []):
+        if node.get("type") != "concept":
+            continue
         node_id = str(node.get("id", ""))
         label = str(node.get("label") or node_id)
-        if node.get("type") == "document":
-            continue
         if node_id.lower() in normalized or label.lower() in normalized:
             entities.add(node_id)
     return entities
@@ -593,5 +867,12 @@ def _mermaid_label(text: str) -> str:
 class _PreselectedIndexProvider:
     def search(self, question: str, chunks: list[Chunk], top_k: int = 4) -> list[Chunk]:
         return chunks[:top_k]
+
+
+
+
+
+
+
 
 

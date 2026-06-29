@@ -24,27 +24,37 @@ KNOWN_CONCEPTS = [
     "BPE",
     "OOV",
     "Tokenizer",
+    "subword tokenization",
     "subword",
     "RNN",
     "LSTM",
     "CNN",
+    "sequence data",
+    "long-term dependency",
+    "local pattern",
+    "text classification",
+    "NLP pipeline",
 ]
 
-RELATION_HINTS = {
-    "OCR": ("PDF parsing", "supports"),
-    "source citation": ("RAG", "grounds"),
-    "sha256 cache": ("repeated processing cost", "reduces"),
-    "request_id": ("failure tracking", "enables"),
-    "GraphRAG-lite": ("concept map", "builds"),
-    "chunk": ("source citation", "preserves"),
-    "page": ("source citation", "anchors"),
-    "TTS": ("audio script", "renders"),
-    "BPE": ("OOV", "reduces"),
-    "Tokenizer": ("BPE", "uses"),
-    "subword": ("OOV", "reduces"),
-    "LSTM": ("RNN", "extends"),
-    "CNN": ("text classification", "supports"),
+RELATION_HINTS: dict[str, list[tuple[str, str]]] = {
+    "OCR": [("PDF parsing", "supports")],
+    "source citation": [("RAG", "grounds")],
+    "sha256 cache": [("repeated processing cost", "reduces")],
+    "request_id": [("failure tracking", "enables")],
+    "GraphRAG-lite": [("concept map", "builds"), ("RAG", "augments")],
+    "chunk": [("source citation", "preserves")],
+    "page": [("source citation", "anchors")],
+    "TTS": [("audio script", "renders")],
+    "Tokenizer": [("BPE", "uses"), ("BPE", "prerequisite_of")],
+    "subword tokenization": [("BPE", "prerequisite_of"), ("OOV", "reduces")],
+    "subword": [("BPE", "prerequisite_of"), ("OOV", "reduces")],
+    "BPE": [("OOV", "reduces"), ("subword tokenization", "is_a"), ("NLP pipeline", "used_in")],
+    "RNN": [("sequence data", "handles"), ("NLP pipeline", "used_in")],
+    "LSTM": [("RNN", "improves"), ("long-term dependency", "handles"), ("NLP pipeline", "used_in")],
+    "CNN": [("local pattern", "captures"), ("text classification", "used_in"), ("NLP pipeline", "used_in")],
 }
+
+STRUCTURAL_RELATIONS = {"contains", "mentions", "introduces", "appears_in", "evidence_in"}
 
 
 def build_concept_map(chunks: list[Chunk], output_dir: str | None = None) -> dict:
@@ -54,10 +64,14 @@ def build_concept_map(chunks: list[Chunk], output_dir: str | None = None) -> dic
     seen_edges: set[tuple[str, str, str, str | None, str]] = set()
 
     for chunk in chunks:
+        metadata = chunk.metadata or {}
         concepts = _concepts_from_text(chunk.text)
-        doc_id = chunk.metadata.get("doc_id") if chunk.metadata else None
-        filename = chunk.metadata.get("filename") if chunk.metadata else None
+        doc_id = metadata.get("doc_id")
+        filename = metadata.get("filename")
         doc_node_id = _document_node_id(doc_id, filename)
+        lecture_node_id = _lecture_node_id(metadata, doc_node_id)
+        page_node_id = _page_node_id(metadata, doc_node_id, chunk.page)
+        chunk_node_id = _chunk_node_id(metadata, doc_node_id, chunk.page, chunk.chunk_id)
 
         if doc_node_id:
             nodes.setdefault(
@@ -71,37 +85,74 @@ def build_concept_map(chunks: list[Chunk], output_dir: str | None = None) -> dic
                 },
             )
 
+        if lecture_node_id:
+            nodes.setdefault(
+                lecture_node_id,
+                {
+                    "id": lecture_node_id,
+                    "label": _lecture_label(metadata, filename),
+                    "type": "lecture",
+                    "doc_id": doc_id,
+                    "filename": filename,
+                    "week": metadata.get("week"),
+                    "lecture_no": metadata.get("lecture_no"),
+                },
+            )
+            if doc_node_id:
+                _append_edge(edges, seen_edges, doc_node_id, lecture_node_id, "contains", chunk, doc_id)
+
+        if page_node_id:
+            nodes.setdefault(
+                page_node_id,
+                {
+                    "id": page_node_id,
+                    "label": f"page {chunk.page}",
+                    "type": "page",
+                    "doc_id": doc_id,
+                    "filename": filename,
+                    "page": chunk.page,
+                },
+            )
+            parent = lecture_node_id or doc_node_id
+            if parent:
+                _append_edge(edges, seen_edges, parent, page_node_id, "contains", chunk, doc_id)
+
+        nodes.setdefault(
+            chunk_node_id,
+            {
+                "id": chunk_node_id,
+                "label": chunk.chunk_id,
+                "type": "chunk",
+                "doc_id": doc_id,
+                "filename": filename,
+                "page": chunk.page,
+                "chunk_id": chunk.chunk_id,
+            },
+        )
+        if page_node_id:
+            _append_edge(edges, seen_edges, page_node_id, chunk_node_id, "contains", chunk, doc_id)
+
         for concept in concepts:
             node = nodes.setdefault(concept, {"id": concept, "label": concept, "type": "concept", "documents": []})
             _add_document_to_node(node, doc_id=doc_id, filename=filename)
+            _append_edge(edges, seen_edges, chunk_node_id, concept, "mentions", chunk, doc_id)
+            _append_edge(edges, seen_edges, concept, chunk_node_id, "evidence_in", chunk, doc_id)
+            if lecture_node_id:
+                _append_edge(edges, seen_edges, lecture_node_id, concept, "introduces", chunk, doc_id)
+            elif doc_node_id:
+                _append_edge(edges, seen_edges, doc_node_id, concept, "introduces", chunk, doc_id)
             if doc_node_id:
-                _append_edge(
-                    edges,
-                    seen_edges,
-                    source=concept,
-                    target=doc_node_id,
-                    relation="appears_in",
-                    chunk=chunk,
-                    evidence_doc_id=doc_id,
-                )
+                _append_edge(edges, seen_edges, concept, doc_node_id, "appears_in", chunk, doc_id)
 
         for source, target, relation in _edges_from_concepts(concepts):
             source_node = nodes.setdefault(source, {"id": source, "label": source, "type": "concept", "documents": []})
             target_node = nodes.setdefault(target, {"id": target, "label": target, "type": "concept", "documents": []})
             _add_document_to_node(source_node, doc_id=doc_id, filename=filename)
             _add_document_to_node(target_node, doc_id=doc_id, filename=filename)
-            _append_edge(
-                edges,
-                seen_edges,
-                source=source,
-                target=target,
-                relation=relation,
-                chunk=chunk,
-                evidence_doc_id=doc_id,
-            )
+            _append_edge(edges, seen_edges, source, target, relation, chunk, doc_id)
 
     if not nodes or not edges:
-        warnings.append("No concept graph could be built from the provided chunks.")
+        warnings.append("No course graph could be built from the provided chunks.")
 
     graph = {"nodes": list(nodes.values()), "edges": edges, "warnings": warnings}
     if output_dir:
@@ -129,6 +180,7 @@ def _append_edge(
             "source": source,
             "target": target,
             "relation": relation,
+            "edge_type": "structural" if relation in STRUCTURAL_RELATIONS else "conceptual",
             "evidence": [source_ref.to_dict() for source_ref in _sources_from_chunks([chunk])],
         }
     )
@@ -137,6 +189,37 @@ def _append_edge(
 def _document_node_id(doc_id: str | None, filename: str | None) -> str | None:
     value = doc_id or filename
     return f"doc:{value}" if value else None
+
+
+def _lecture_node_id(metadata: dict, doc_node_id: str | None) -> str | None:
+    week = metadata.get("week")
+    lecture_no = metadata.get("lecture_no")
+    if week is None and lecture_no is None:
+        return None
+    suffix = f"week:{week or 'unknown'}:lecture:{lecture_no or 'unknown'}"
+    return f"lecture:{doc_node_id}:{suffix}" if doc_node_id else f"lecture:{suffix}"
+
+
+def _page_node_id(metadata: dict, doc_node_id: str | None, page: int) -> str | None:
+    value = doc_node_id or metadata.get("filename") or metadata.get("doc_id")
+    return f"page:{value}:{page}" if value else f"page:{page}"
+
+
+def _chunk_node_id(metadata: dict, doc_node_id: str | None, page: int, chunk_id: str) -> str:
+    value = doc_node_id or metadata.get("filename") or metadata.get("doc_id") or "document"
+    return f"chunk:{value}:{page}:{chunk_id}"
+
+
+def _lecture_label(metadata: dict, filename: str | None) -> str:
+    week = metadata.get("week")
+    lecture_no = metadata.get("lecture_no")
+    if week is not None and lecture_no is not None:
+        return f"Lecture {week}-{lecture_no}"
+    if week is not None:
+        return f"Week {week} lecture"
+    if lecture_no is not None:
+        return f"Lecture {lecture_no}"
+    return filename or "lecture"
 
 
 def _add_document_to_node(node: dict, doc_id: str | None, filename: str | None) -> None:
@@ -155,17 +238,15 @@ def _concepts_from_text(text: str) -> list[str]:
         if len(phrase) >= 3 and phrase not in concepts:
             concepts.append(phrase)
 
-    return concepts[:8]
+    return concepts[:10]
 
 
 def _edges_from_concepts(concepts: list[str]) -> list[tuple[str, str, str]]:
     edges: list[tuple[str, str, str]] = []
     for source in concepts:
-        hinted = RELATION_HINTS.get(source)
-        if hinted:
-            target, relation = hinted
-            edges.append((source, target, relation))
-            continue
+        for target, relation in RELATION_HINTS.get(source, []):
+            if source != target and (source, target, relation) not in edges:
+                edges.append((source, target, relation))
     for left, right in zip(concepts, concepts[1:]):
         if left != right and (left, right, "related_to") not in edges:
             edges.append((left, right, "related_to"))

@@ -12,6 +12,10 @@ Documentation is split by purpose:
 - `ARCHITECTURE.md`: v2 architecture overview
 - `WORKFLOW.md`: v2 LangGraph-style workflow design
 - `PROVIDERS.md`: local/cloud-ready provider interfaces
+- `LIGHTRAG_ROUTER.md`: LightRAG-style dual-level retrieval router
+- `HIERARCHICAL_RETRIEVAL.md`: RAPTOR-style course-structure-aware summary retrieval
 - `GRAPH_RAG.md`: GraphRAG-lite design
 - `CLOUD_READY_PLAN.md`: future cloud migration path
 - `EVALUATION.md`: validation and evaluation plan
+
+

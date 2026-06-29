@@ -53,8 +53,19 @@ class AnswerResponse(BaseModel):
     mode: str | None = None
     retrieval_mode: str | None = None
     graph_context: list[dict[str, Any]] = Field(default_factory=list)
+    matched_entities: list[str] = Field(default_factory=list)
+    traversal_strategy: str | None = None
+    graph_paths: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    abstraction_level: str | None = None
+    selected_summary_nodes: list[dict[str, Any]] = Field(default_factory=list)
+    supporting_chunks: list[dict[str, Any]] = Field(default_factory=list)
+    hierarchical_summary_index: dict[str, Any] = Field(default_factory=dict)
+    routed_mode: str | None = None
+    question_type: str | None = None
+    retrieval_plan: list[dict[str, Any]] = Field(default_factory=list)
+    selected_retrievers: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-
 
 class StudyKitRequest(QueryRequest):
     max_items: int = 4
@@ -179,4 +190,8 @@ class CoursePackConceptMapExportResponse(BaseModel):
 class CoursePackConceptMapRequest(BaseModel):
     pack_id: str
     output_root: str = "outputs"
+
+
+
+
 
