@@ -6,6 +6,7 @@ from v2.providers.base import IndexProvider, LLMProvider
 from v2.schemas import Chunk, SourceGroundedAnswer, SourceRef
 
 NO_CONTEXT_WARNING = "No relevant context was found in the document. Answer generation was skipped."
+GENERAL_FALLBACK_WARNING = "No relevant course context was found. The answer was generated from the LLM general knowledge without source citations."
 
 
 def generate_source_grounded_answer(
@@ -14,16 +15,33 @@ def generate_source_grounded_answer(
     index_provider: IndexProvider,
     llm_provider: LLMProvider | None = None,
     top_k: int = 4,
+    allow_general_fallback: bool = False,
 ) -> SourceGroundedAnswer:
     selected_chunks = index_provider.search(query, chunks, top_k=top_k)
+    warnings: list[str] = []
     if not selected_chunks:
-        return SourceGroundedAnswer(answer="", sources=[], warnings=[NO_CONTEXT_WARNING])
+        if allow_general_fallback and llm_provider is not None and llm_provider.__class__.__name__ != "MockLLMProvider":
+            try:
+                answer = llm_provider.answer(query, [], []).answer.strip()
+            except Exception as exc:  # pragma: no cover - provider failures are runtime-dependent
+                warnings.append(f"LLM general fallback failed: {exc}")
+            else:
+                if answer:
+                    return SourceGroundedAnswer(answer=answer, sources=[], warnings=[GENERAL_FALLBACK_WARNING, *warnings])
+        return SourceGroundedAnswer(answer="", sources=[], warnings=[NO_CONTEXT_WARNING, *warnings])
 
     sources = _sources_from_chunks(selected_chunks)
-    answer = _compose_grounded_answer(query, selected_chunks)
+    answer = ""
+    if llm_provider is not None and llm_provider.__class__.__name__ != "MockLLMProvider":
+        try:
+            answer = llm_provider.answer(query, selected_chunks, []).answer.strip()
+        except Exception as exc:  # pragma: no cover - provider failures are runtime-dependent
+            warnings.append(f"LLM answer generation failed; falling back to source composer: {exc}")
+    if not answer:
+        answer = _compose_grounded_answer(query, selected_chunks)
     if not answer.strip():
         return SourceGroundedAnswer(answer="", sources=[], warnings=[NO_CONTEXT_WARNING])
-    return SourceGroundedAnswer(answer=answer, sources=sources, warnings=[])
+    return SourceGroundedAnswer(answer=answer, sources=sources, warnings=warnings)
 
 
 def _compose_grounded_answer(query: str, chunks: list[Chunk]) -> str:

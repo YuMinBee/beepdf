@@ -1,0 +1,53 @@
+{
+  "relation_bpe_oov": {
+    "must_include_sources": ["자연어처리_11주차_1차시.txt"],
+    "must_include_concepts": ["BPE", "OOV"]
+  },
+  "learning_path_bpe": {
+    "must_include_sources": ["자연어처리_11주차_1차시.txt"],
+    "must_include_concepts": ["BPE", "subword tokenization"]
+  },
+  "overview_week11": {
+    "must_include_sources": [
+      "자연어처리_11주차_1차시.txt",
+      "자연어처리_11주차_2차시.txt",
+      "자연어처리_11주차_3차시.txt"
+    ],
+    "must_include_concepts": []
+  },
+  "pipeline_relation": {
+    "must_include_sources": [
+      "자연어처리_11주차_2차시.txt",
+      "자연어처리_11주차_3차시.txt"
+    ],
+    "must_include_concepts": ["RNN", "LSTM", "CNN"]
+  },
+  "fact_lstm": {
+    "must_include_sources": ["자연어처리_11주차_2차시.txt"],
+    "must_include_concepts": []
+  },
+  "fact_cnn": {
+    "must_include_sources": ["자연어처리_11주차_3차시.txt"],
+    "must_include_concepts": []
+  },
+  "mixed_overview_relation": {
+    "must_include_sources": [
+      "자연어처리_11주차_1차시.txt",
+      "자연어처리_11주차_2차시.txt",
+      "자연어처리_11주차_3차시.txt"
+    ],
+    "must_include_concepts": []
+  },
+  "no_context_fallback": {
+    "must_include_sources": [],
+    "must_include_concepts": []
+  },
+  "graphrag_concept_map": {
+    "must_include_sources": ["자연어처리_11주차_3차시.txt"],
+    "must_include_concepts": ["GraphRAG-lite", "concept map"]
+  },
+  "source_citation_fact": {
+    "must_include_sources": ["자연어처리_11주차_3차시.txt"],
+    "must_include_concepts": []
+  }
+}

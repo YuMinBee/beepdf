@@ -1,9 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import unittest
 
 from v2.api.routes import router
-from v2.api.schemas import AudioScriptRequest, CoursePackSummaryRequest, IngestRequest, QueryRequest
+from v2.api.schemas import AudioScriptRequest, CoursePackJobRequest, CoursePackSummaryRequest, IngestRequest, QueryRequest
 
 
 class ApiSchemaTest(unittest.TestCase):
@@ -12,6 +12,7 @@ class ApiSchemaTest(unittest.TestCase):
         query = QueryRequest(doc_id="abc123", question="What is this document about?")
         audio = AudioScriptRequest(doc_id="abc123", query="OCR", mode="briefing_3min")
         summary = CoursePackSummaryRequest(pack_id="pack_abc123")
+        job = CoursePackJobRequest(paths=["week1.txt"])
 
         self.assertEqual(ingest.output_root, "outputs")
         self.assertEqual(query.top_k, 4)
@@ -23,12 +24,16 @@ class ApiSchemaTest(unittest.TestCase):
         self.assertEqual(audio.knowledge_scope, "course_pack")
         self.assertEqual(summary.llm_provider, "mock")
         self.assertEqual(summary.llm_model, None)
+        self.assertEqual(job.output_root, "outputs")
+        self.assertEqual(job.max_chunk_chars, 900)
 
     def test_router_is_defined_when_fastapi_is_available(self) -> None:
         if router is not None:
             paths = {getattr(route, "path", None) for route in router.routes}
             self.assertIn("/v2/documents/ingest", paths)
             self.assertIn("/v2/documents/{doc_id}", paths)
+            self.assertIn("/v2/course-packs/jobs", paths)
+            self.assertIn("/v2/course-packs/jobs/{job_id}", paths)
             self.assertIn("/v2/ask", paths)
             self.assertIn("/v2/study-kit", paths)
             self.assertIn("/v2/audio-script", paths)

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import unittest
@@ -17,6 +17,7 @@ from v2.api.schemas import (
     CoursePackConceptMapRequest,
     CoursePackConceptMapExportRequest,
     CoursePackIngestRequest,
+    CoursePackJobRequest,
     CoursePackQueryRequest,
     CoursePackStudyKitRequest,
     CoursePackSummaryRequest,
@@ -309,6 +310,34 @@ class CoursePackBehaviorTest(unittest.TestCase):
         self.assertEqual(response["routed_mode"], "local_graph")
         self.assertEqual(response["traversal_strategy"], "prerequisite")
         self.assertTrue(response["graph_paths"])
+
+    def test_v2_course_pack_auto_router_returns_trace(self) -> None:
+        root = self._case_dir()
+        first = root / "nlp_week11_lecture1.txt"
+        first.write_text("BPE reduces OOV through subword tokenization.", encoding="utf-8")
+        pack = routes.ingest_course_pack(
+            CoursePackIngestRequest(paths=[str(first)], output_root=str(root / "outputs"), max_chunk_chars=120)
+        )
+
+        response = routes.ask_course_pack(
+            CoursePackQueryRequest(
+                pack_id=pack["pack_id"],
+                question="What is the relationship between BPE and OOV?",
+                output_root=str(root / "outputs"),
+                top_k=4,
+                mode="auto",
+            )
+        )
+
+        trace = response["trace"]
+        self.assertTrue(trace["request_id"].startswith("req_"))
+        self.assertTrue(trace["stages"])
+        self.assertTrue(any(stage["name"] == "classify_question" for stage in trace["stages"]))
+        self.assertTrue(any(stage["name"] == "retrieve_graph_context" for stage in trace["stages"]))
+        self.assertGreaterEqual(trace["retrieval_debug"]["candidate_chunks"], 1)
+        self.assertGreaterEqual(trace["retrieval_debug"]["selected_chunks"], 1)
+        self.assertFalse(trace["retrieval_debug"]["fallback_used"])
+
     def test_v2_course_pack_writes_hierarchical_summary_index(self) -> None:
         pack, _ = self._create_pack()
         index_path = Path(pack["output_dir"]) / "hierarchical_summary_index.json"
@@ -556,6 +585,38 @@ class CoursePackBehaviorTest(unittest.TestCase):
         self.assertGreater(response["exported_edge_count"], 0)
         self.assertIn("mermaid", html_path.read_text(encoding="utf-8"))
 
+
+
+    def test_v2_course_pack_job_records_status_and_pack(self) -> None:
+        root = self._case_dir()
+        first = root / "nlp_week11_lecture1.txt"
+        second = root / "nlp_week11_lecture2.txt"
+        first.write_text("BPE reduces OOV through subword tokenization.", encoding="utf-8")
+        second.write_text("LSTM improves RNN sequence memory with gates.", encoding="utf-8")
+
+        job = routes.create_course_pack_job(
+            CoursePackJobRequest(
+                paths=[str(first), str(second)],
+                output_root=str(root / "outputs"),
+                max_chunk_chars=120,
+                pack_id="pack_job_test",
+            )
+        )
+
+        self.assertTrue(job["job_id"].startswith("job_"))
+        self.assertEqual(job["status"], "succeeded")
+        self.assertEqual(job["stage"], "completed")
+        self.assertEqual(job["progress"], 1.0)
+        self.assertEqual(job["processed_documents"], 2)
+        self.assertEqual(job["total_documents"], 2)
+        self.assertEqual(job["pack_id"], "pack_job_test")
+        self.assertEqual(job["course_pack"]["pack_id"], "pack_job_test")
+
+        loaded = routes.get_course_pack_job(job["job_id"], output_root=str(root / "outputs"))
+        self.assertEqual(loaded["job_id"], job["job_id"])
+        self.assertEqual(loaded["status"], "succeeded")
+        self.assertTrue((root / "outputs" / "course_pack_jobs" / f"{job['job_id']}.json").exists())
+        self.assertTrue((root / "outputs" / "course_packs" / "pack_job_test" / "course_pack.json").exists())
 
     def test_v2_missing_course_pack_returns_404(self) -> None:
         missing_id = f"missing-{uuid4().hex}"

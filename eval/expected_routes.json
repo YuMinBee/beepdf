@@ -1,0 +1,56 @@
+{
+  "relation_bpe_oov": {
+    "expected_question_type": "relation_question",
+    "expected_route": "local_graph",
+    "expected_retrieval_mode": "local_graph"
+  },
+  "learning_path_bpe": {
+    "expected_question_type": "learning_path_question",
+    "expected_route": "local_graph",
+    "expected_retrieval_mode": "course_graph_path",
+    "expected_traversal_strategy": "prerequisite"
+  },
+  "overview_week11": {
+    "expected_question_type": "overview_question",
+    "expected_route": "hierarchical",
+    "expected_retrieval_mode": "hierarchical_summary",
+    "expected_abstraction_level": "course_pack"
+  },
+  "pipeline_relation": {
+    "expected_question_type": "relation_question",
+    "expected_route": "local_graph",
+    "expected_retrieval_mode": "course_graph_path",
+    "expected_traversal_strategy": "path"
+  },
+  "fact_lstm": {
+    "expected_question_type": "fact_question",
+    "expected_route": "vector",
+    "expected_retrieval_mode": "vector"
+  },
+  "fact_cnn": {
+    "expected_question_type": "fact_question",
+    "expected_route": "vector",
+    "expected_retrieval_mode": "vector"
+  },
+  "mixed_overview_relation": {
+    "expected_question_type": "mixed_question",
+    "expected_route": "hierarchical",
+    "expected_retrieval_mode": "hierarchical_summary"
+  },
+  "no_context_fallback": {
+    "expected_question_type": "relation_question",
+    "expected_route": "local_graph",
+    "expected_retrieval_mode": "local_graph_fallback_vector",
+    "expected_fallback": true
+  },
+  "graphrag_concept_map": {
+    "expected_question_type": "relation_question",
+    "expected_route": "local_graph",
+    "expected_retrieval_mode": "local_graph"
+  },
+  "source_citation_fact": {
+    "expected_question_type": "fact_question",
+    "expected_route": "vector",
+    "expected_retrieval_mode": "vector"
+  }
+}

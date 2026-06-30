@@ -1,0 +1,10 @@
+{"id":"relation_bpe_oov","question":"BPE와 OOV는 어떤 관계야?","mode":"auto","category":"relation","notes":"Graph route should use the BPE -> OOV edge and cite lecture 11-1 evidence."}
+{"id":"learning_path_bpe","question":"BPE를 이해하려면 먼저 뭘 알아야 해?","mode":"auto","category":"learning_path","notes":"Learning-path route should traverse prerequisite edges toward BPE."}
+{"id":"overview_week11","question":"11주차 전체 흐름 설명해줘","mode":"auto","category":"overview","notes":"Overview route should choose hierarchical summary retrieval."}
+{"id":"pipeline_relation","question":"RNN, LSTM, CNN은 NLP pipeline에서 어떻게 연결돼?","mode":"auto","category":"relation","notes":"Graph route should find course graph paths between sequence and local-pattern concepts."}
+{"id":"fact_lstm","question":"LSTM 정의가 뭐야?","mode":"auto","category":"fact","notes":"Fact route should stay on chunk-level vector retrieval."}
+{"id":"fact_cnn","question":"CNN local pattern explain","mode":"auto","category":"fact","notes":"Fact/detail route should stay on chunk-level vector retrieval."}
+{"id":"mixed_overview_relation","question":"11주차 전체 흐름과 BPE, RNN, CNN 연결 관계를 정리해줘","mode":"auto","category":"mixed","notes":"Mixed overview + relation question should start from hierarchical summary and keep graph follow-up in the plan."}
+{"id":"no_context_fallback","question":"Transformer와 Attention은 어떤 관계야?","mode":"auto","category":"fallback","notes":"Relation question with no matching course graph concepts should fall back to vector retrieval with a warning."}
+{"id":"graphrag_concept_map","question":"GraphRAG-lite와 concept map은 어떤 관계야?","mode":"auto","category":"relation","notes":"Graph route should use the GraphRAG-lite -> concept map edge."}
+{"id":"source_citation_fact","question":"source citation은 RAG에서 왜 중요해?","mode":"auto","category":"fact","notes":"Fact route should retrieve the source-citation chunk and preserve provenance."}

@@ -107,7 +107,7 @@ class SourceGroundedGenerationTest(unittest.TestCase):
 
             self.assertEqual(script["mode"], mode)
             self.assertTrue(script["script"])
-            self.assertRegex(script["script"][0]["text"], "브리핑|대본|근거")
+            self.assertRegex(script["script"][0]["text"], "오디오|브리핑|정리|흐름|강의형|설명")
             self.assertEqual(script["tts_status"], "mock")
             self.assertIsNone(script["audio_path"])
             self.assertTrue(all(segment["sources"] for segment in script["script"]))

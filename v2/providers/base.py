@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Protocol
 
@@ -32,13 +32,14 @@ class TTSProvider(Protocol):
         """Generate audio and return a local path, remote URL, or None for mock TTS."""
 
 
-class IndexProvider(Protocol):
+class RetrieverProvider(Protocol):
+    def search(self, question: str, chunks: list[Chunk], top_k: int = 4) -> list[Chunk]:
+        """Return relevant chunks while preserving source metadata."""
+
+
+class IndexProvider(RetrieverProvider, Protocol):
     def build(self, doc_id: str, chunks: list[Chunk]) -> str:
         """Build an index and return the index path or collection name."""
-
-    def search(self, question: str, chunks: list[Chunk], top_k: int = 4) -> list[Chunk]:
-        """Return relevant chunks while preserving page and chunk metadata."""
-
 
 class ParserProvider(Protocol):
     def parse(self, path: str) -> list[PageMarkdown]:

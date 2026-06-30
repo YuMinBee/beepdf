@@ -1,4 +1,4 @@
-﻿# Providers
+# Providers
 
 BeePDF v2 separates infrastructure concerns behind provider interfaces. Local implementations are used by default, while cloud services can be added without rewriting the workflow.
 
@@ -100,12 +100,34 @@ Responsibilities:
 - Convert generated scripts to audio.
 - Return local file paths, object storage URLs, or `null` for mock TTS.
 
+## RetrieverProvider
+
+Local demo:
+
+- `LexicalRetriever`
+- `SimpleRetriever` compatibility alias
+
+Current implementation:
+
+- Tokenizes query and chunk text.
+- Computes term frequency and IDF-style scores.
+- Returns top-k chunks while preserving `doc_id`, `filename`, `page`, `chunk_id`, and lecture metadata.
+
+Production replacements:
+
+- `EmbeddingRetriever` backed by sentence-transformers or OpenAI embeddings
+- `VectorDBRetriever` backed by Chroma, FAISS, pgvector, or a managed vector DB
+- `HybridRetriever` combining lexical and embedding scores
+- Optional `Reranker` using a cross-encoder or LLM judge
+
+This split is intentional. The local demo favors reproducibility and explainability, while production can swap in semantic retrieval behind the same provider boundary.
 ## IndexProvider
 
 Local demo:
 
 - `LocalIndexProvider`
-- `SimpleRetriever`
+- `LexicalRetriever`
+- `SimpleRetriever` compatibility alias
 
 Future replacements:
 
@@ -131,10 +153,6 @@ LocalParserProvider -> OCR/parser worker
 MockOCRProvider/LocalTesseractOCRProvider -> ClovaOCRProvider/managed OCR
 MockLLMProvider -> OpenAIProvider/ClovaStudioProvider/OllamaProvider
 MockTTSProvider -> ClovaVoiceProvider/LocalTTSProvider
-LocalIndexProvider -> ManagedVectorDBProvider
+LexicalRetriever/LocalIndexProvider -> EmbeddingRetriever/HybridRetriever/ManagedVectorDBProvider
 In-process workflow -> Queue-based worker execution
 ```
-
-
-
-

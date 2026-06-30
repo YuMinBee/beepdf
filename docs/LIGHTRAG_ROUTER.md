@@ -1,6 +1,6 @@
-﻿# LightRAG-style Retrieval Router
+﻿# Query-type Retrieval Router
 
-CourseBee v2 uses a LightRAG-style routing idea to combine low-level factual retrieval with high-level relationship and overview retrieval. This is not a full LightRAG implementation. It is a deterministic Course Pack retrieval router that chooses among existing retrieval strategies.
+CourseBee v2 uses a query-type router to combine low-level factual retrieval with high-level relationship and overview retrieval. It is a deterministic Course Pack retrieval router that chooses among existing retrieval strategies.
 
 ## Retrieval Levels
 
@@ -15,9 +15,9 @@ CourseBee v2 uses a LightRAG-style routing idea to combine low-level factual ret
 ```text
 fact_question          -> vector retrieval
 relation_question      -> course graph retrieval
-overview_question      -> hierarchical summary retrieval
+overview_question      -> multi-level summary retrieval
 learning_path_question -> prerequisite graph traversal
-mixed_question         -> hierarchical summary first, graph noted in plan
+mixed_question         -> multi-level summary first, graph noted in plan
 ```
 
 ## Example Request
@@ -55,4 +55,4 @@ mixed_question         -> hierarchical summary first, graph noted in plan
 
 ## Why It Matters
 
-Without routing, users must know whether to choose vector, graph, or hierarchical retrieval. With `mode="auto"`, CourseBee chooses a retrieval strategy based on the question shape and still exposes the decision through `question_type`, `routed_mode`, and `retrieval_plan`.
+Without routing, users must know whether to choose vector, graph, or multi-level summary retrieval. With `mode="auto"`, CourseBee chooses a retrieval strategy based on the question shape and still exposes the decision through `question_type`, `routed_mode`, and `retrieval_plan`.

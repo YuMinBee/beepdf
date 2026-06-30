@@ -39,12 +39,30 @@ class OllamaProvider:
         return self._generate(prompt, max_tokens=900)
 
     def answer(self, question: str, chunks: list[Chunk], graph_context: list[RelationTriple]) -> AnswerWithSources:
+        context = _context_block(chunks, max_chars_per_chunk=1300)
+        if chunks:
+            grounding_instruction = (
+                "Answer conversationally, but ground lecture-specific claims in the provided source chunks. "
+                "Do not invent lecture facts, filenames, pages, numbers, or relationships that are not in the chunks. "
+                "If the chunks do not support part of the question, clearly say that the course materials do not confirm it. "
+            )
+            source_section = f"SOURCE CHUNKS:\n{context}"
+        else:
+            grounding_instruction = (
+                "No matching CourseBee source chunks were retrieved. Begin with exactly this Korean sentence: 강의 자료에서 직접 근거는 찾지 못했어요. 아래는 일반 지식 기반 설명입니다. "
+                "Then you must still answer the user's question from general knowledge as a study tutor. "
+                "Do not refuse, do not ask the user to clarify, and do not stop after saying that no source was found unless the question is truly empty or nonsensical. "
+                "Do not claim that the answer is source-grounded. "
+            )
+            source_section = "SOURCE CHUNKS: none"
         prompt = (
-            "You must write the entire output in Korean only. Answer using only the source chunks below. "
-            "If the sources are insufficient, say so.\n\n"
-            f"Question: {question}\n\n{_context_block(chunks)}"
+            "You are CourseBee's study chat tutor. Write the entire answer in Korean. "
+            f"{grounding_instruction}"
+            "You may add a short general background explanation only when it helps. "
+            "Do not write citation numbers, bracket references, footnotes, or source labels; the application maps citations separately.\n\n"
+            f"Question: {question}\n\n{source_section}"
         )
-        return AnswerWithSources(answer=self._generate(prompt, max_tokens=700), vector_sources=[], graph_context=graph_context)
+        return AnswerWithSources(answer=self._generate(prompt, max_tokens=1200), vector_sources=[], graph_context=graph_context)
 
     def extract_relations(self, chunks: list[Chunk]) -> list[RelationTriple]:
         return []

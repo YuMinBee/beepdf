@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 190" role="img" aria-label="course graph">
+  <style>
+    .edge{stroke:#596572;stroke-width:1.5}
+    .node{fill:#eef5f7;font:700 11px system-ui,sans-serif;text-anchor:middle}
+  </style>
+  <rect width="420" height="190" rx="8" fill="#1b2026"/>
+  <line class="edge" x1="75" y1="92" x2="160" y2="52"/>
+  <line class="edge" x1="160" y1="52" x2="260" y2="52"/>
+  <line class="edge" x1="160" y1="52" x2="260" y2="120"/>
+  <line class="edge" x1="260" y1="120" x2="345" y2="92"/>
+  <line class="edge" x1="260" y1="52" x2="345" y2="92"/>
+  <circle cx="75" cy="92" r="25" fill="#2e6c61"/>
+  <text class="node" x="75" y="96">Lecture</text>
+  <circle cx="160" cy="52" r="25" fill="#7359b8"/>
+  <text class="node" x="160" y="56">BPE</text>
+  <circle cx="260" cy="52" r="25" fill="#9b6248"/>
+  <text class="node" x="260" y="56">OOV</text>
+  <circle cx="260" cy="120" r="25" fill="#5c7fb5"/>
+  <text class="node" x="260" y="124">RNN</text>
+  <circle cx="345" cy="92" r="25" fill="#59764c"/>
+  <text class="node" x="345" y="96">NLP</text>
+</svg>

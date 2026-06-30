@@ -1,6 +1,6 @@
-﻿# Hierarchical Summary Retrieval
+﻿# Multi-level Summary Retrieval
 
-CourseBee v2 uses a RAPTOR-style idea, but adapts it to course materials. Instead of building a clustered embedding tree, the current implementation builds a course-structure-aware summary index from the natural hierarchy of learning materials.
+CourseBee v2 uses a multi-level summary retrieval idea adapted to course materials. Instead of building a clustered embedding tree, the current implementation builds a course-structure-aware summary index from the natural hierarchy of learning materials.
 
 ```text
 Chunk summaries
@@ -14,7 +14,7 @@ Chunk-level retrieval works well for local detail questions, but global overview
 
 ```text
 BPE와 OOV는 어떤 관계야?          -> chunk or graph retrieval
-11주차 전체 흐름 설명해줘          -> hierarchical summary retrieval
+11주차 전체 흐름 설명해줘          -> multi-level summary retrieval
 1차시부터 3차시까지 어떻게 이어져? -> lecture summary + supporting chunks
 ```
 
@@ -58,4 +58,4 @@ The index contains:
 
 ## Scope
 
-This is not a full RAPTOR implementation. It does not yet perform embedding clustering or recursive LLM summarization over clusters. The current version is a deterministic Course Pack hierarchy that separates global overview retrieval from local detail retrieval.
+This is not a clustered embedding-tree implementation. It does not perform embedding clustering or recursive LLM summarization over clusters. The current version is a deterministic Course Pack hierarchy that separates global overview retrieval from local detail retrieval. It is inspired by hierarchical summarization ideas, but intentionally scoped to the current Course Pack structure.

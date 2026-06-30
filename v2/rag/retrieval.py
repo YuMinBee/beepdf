@@ -6,7 +6,7 @@ from collections import Counter
 
 from v2.schemas import Chunk, RetrievalContext, RetrievalResult
 
-_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9가-힣_]+")
+_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+|[\uac00-\ud7a3]+")
 
 
 def retrieve_contexts(query: str, chunks: list[Chunk], top_k: int = 4) -> RetrievalResult:

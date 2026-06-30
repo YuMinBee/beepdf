@@ -1,6 +1,6 @@
-﻿# GraphRAG-lite / Course Graph Retrieval
+# Concept Graph-assisted Retrieval
 
-CourseBee v2 uses GraphRAG-lite as a lightweight graph-augmented retrieval layer over a Course Pack. It is not full Microsoft GraphRAG. The graph is built from course structure nodes and evidence-backed concept relations that can be used during retrieval.
+CourseBee v2 uses Concept Graph-assisted Retrieval as a lightweight retrieval layer over a Course Pack. It is not a full graph indexing system. The graph is built from course structure nodes and evidence-backed concept relations that can be used during retrieval.
 
 ## Graph Shape
 
@@ -62,6 +62,10 @@ concept -> evidence_in -> chunk
 }
 ```
 
-## Why This Is Still GraphRAG-lite
+## Scope
 
-The implementation intentionally avoids claiming a full GraphRAG stack. It does not perform global community detection, graph summarization, or large-scale entity resolution. Instead, it provides a practical Course Pack retrieval layer where structure and concept paths help select evidence chunks before answer generation.
+The implementation intentionally avoids claiming a full graph indexing stack. It does not perform global community detection, graph summarization, or large-scale entity resolution. Instead, it provides a practical Course Pack retrieval layer where structure and concept paths help select evidence chunks before answer generation.
+
+## Evaluation
+
+See [Concept Graph Retrieval Evaluation](GRAPH_RAG_EVALUATION.md) for case-based comparisons of vector retrieval, graph retrieval, prerequisite traversal, pipeline paths, and no-context fallback behavior.

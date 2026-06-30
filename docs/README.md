@@ -1,8 +1,10 @@
-﻿# docs
+# docs
 
 Documentation is split by purpose:
 
 
+- `coursebee_demo_ui.html`: CourseBee v2 app-style demo UI served at `/demo`
+- `coursebee_demo_ui_ko.html`: Korean CourseBee v2 app-style demo UI served at `/demo-ko`
 - `project_visualization.html`: browser-openable v2 static endpoint viewer with sample request/response payloads and rendered outputs
 - `COURSE_PACK_CASE_STUDY.md`: portfolio-style case study covering architecture, representative inputs/outputs, comparisons, and honest limitations
 - `COURSE_PACK_CASE_STUDY_KO.md`: Korean version of the Course Pack engineering case study
@@ -12,10 +14,11 @@ Documentation is split by purpose:
 - `ARCHITECTURE.md`: v2 architecture overview
 - `WORKFLOW.md`: v2 LangGraph-style workflow design
 - `PROVIDERS.md`: local/cloud-ready provider interfaces
-- `LIGHTRAG_ROUTER.md`: LightRAG-style dual-level retrieval router
-- `HIERARCHICAL_RETRIEVAL.md`: RAPTOR-style course-structure-aware summary retrieval
-- `GRAPH_RAG.md`: GraphRAG-lite design
+- `PRODUCTION_READINESS.md`: current local demo status, job API, observability, and production upgrade path
+- `LIGHTRAG_ROUTER.md`: query-type retrieval router
+- `HIERARCHICAL_RETRIEVAL.md`: multi-level summary retrieval
+- `GRAPH_RAG.md`: concept graph-assisted retrieval design
+- `GRAPH_RAG_EVALUATION.md`: case-based comparison of vector vs graph retrieval
 - `CLOUD_READY_PLAN.md`: future cloud migration path
-- `EVALUATION.md`: validation and evaluation plan
-
-
+- `EVALUATION.md`: executable retrieval evaluation harness and latest metrics
+- `CITATION_GROUNDING.md`: citation quality, grounding checks, and source metadata flow

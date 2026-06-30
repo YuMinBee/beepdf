@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -25,12 +25,16 @@ class LocalParserProvider:
         return []
 
 
-class SimpleRetriever:
+class LexicalRetriever:
     def search(self, question: str, chunks: list[Chunk], top_k: int = 4) -> list[Chunk]:
         return chunks_from_contexts(retrieve_contexts(question, chunks, top_k=top_k).contexts)
 
 
-class LocalIndexProvider(SimpleRetriever):
+class SimpleRetriever(LexicalRetriever):
+    pass
+
+
+class LocalIndexProvider(LexicalRetriever):
     def build(self, doc_id: str, chunks: list[Chunk]) -> str:
         return f"outputs/{doc_id}/simple_retriever.json"
 
@@ -42,6 +46,7 @@ __all__ = [
     "MockOCRProvider",
     "LocalTesseractOCRProvider",
     "LocalParserProvider",
+    "LexicalRetriever",
     "SimpleRetriever",
     "LocalIndexProvider",
     "OpenAIProviderError",

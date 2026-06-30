@@ -1,12 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
+import time
 from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
+from urllib.parse import quote
 
 from v2.audio_script import generate_audio_script
 from v2.background_knowledge import BACKGROUND_SCOPE_VALUES, background_chunks_for_query
@@ -15,7 +18,9 @@ from v2.documents import chunk_from_dict, load_chunks
 from v2.graph.concept_map import build_concept_map
 from v2.hierarchical_retrieval import build_hierarchical_summary_index, retrieve_hierarchical_summary
 from v2.ingest import ingest_local_document
+from v2.providers.base import LLMProvider
 from v2.providers.local import MockLLMProvider
+from v2.providers.ollama import OllamaProvider
 from v2.rag.answering import _sources_from_chunks, generate_source_grounded_answer
 from v2.rag.retrieval import chunks_from_contexts, retrieve_contexts
 from v2.retrieval_router import classify_course_pack_question
@@ -106,17 +111,185 @@ def load_course_pack_chunks(pack_id: str, output_root: str = "outputs") -> list[
     return chunks
 
 
-def ask_course_pack(pack_id: str, question: str, output_root: str = "outputs", top_k: int = 4, mode: str = "vector") -> dict:
+def ask_course_pack(
+    pack_id: str,
+    question: str,
+    output_root: str = "outputs",
+    top_k: int = 4,
+    mode: str = "vector",
+    llm_provider: str = "mock",
+    llm_model: str | None = None,
+    allow_general_fallback: bool = False,
+) -> dict:
+    trace = _new_trace()
+    total_started = time.perf_counter()
+    answer_provider = _answer_provider(llm_provider, llm_model)
+
     if mode in {"auto", "router", "dual", "lightrag", "lightrag_dual"}:
-        payload = _ask_course_pack_with_router(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+        started = time.perf_counter()
+        route = classify_course_pack_question(question)
+        _trace_stage(trace, "classify_question", started)
+        payload = _ask_course_pack_with_router(
+            pack_id=pack_id,
+            question=question,
+            output_root=output_root,
+            top_k=top_k,
+            route=route,
+            trace=trace,
+            answer_provider=answer_provider,
+            allow_general_fallback=allow_general_fallback,
+        )
     elif mode == "local_graph":
-        payload = _ask_course_pack_with_graph(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+        payload = _ask_course_pack_with_graph(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, trace=trace, answer_provider=answer_provider, allow_general_fallback=allow_general_fallback)
     elif mode in {"hierarchical", "hierarchical_summary"}:
-        payload = _ask_course_pack_with_hierarchical_summary(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+        payload = _ask_course_pack_with_hierarchical_summary(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, trace=trace, answer_provider=answer_provider, allow_general_fallback=allow_general_fallback)
     else:
-        payload = _ask_course_pack_with_vector(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, mode=mode)
+        payload = _ask_course_pack_with_vector(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, mode=mode, trace=trace, answer_provider=answer_provider, allow_general_fallback=allow_general_fallback)
+
+    payload["llm"] = _answer_llm_metadata(llm_provider, llm_model, answer_provider, payload.get("warnings", []))
+    debug = payload.pop("_retrieval_debug", {})
+    _finish_trace(trace, payload, debug, total_started)
+    payload["trace"] = trace
     _save_pack_artifact(pack_id, output_root, f"answers/{_artifact_name(question)}.json", payload)
     return payload
+
+
+
+
+def _answer_provider(llm_provider: str, llm_model: str | None) -> LLMProvider:
+    provider = (llm_provider or "mock").lower()
+    if provider in {"ollama", "qwen", "qwen3"}:
+        return OllamaProvider(model=llm_model or "qwen3:14b", timeout=180)
+    return MockLLMProvider()
+
+
+def _answer_llm_metadata(
+    requested_provider: str,
+    requested_model: str | None,
+    provider: LLMProvider,
+    warnings: list[str],
+) -> dict:
+    requested = (requested_provider or "mock").lower()
+    failed = any("LLM answer generation failed" in warning for warning in warnings)
+    model = getattr(provider, "model", requested_model)
+    if isinstance(provider, MockLLMProvider):
+        status = "mock" if requested in {"mock", "rule", "local"} else "fallback"
+    else:
+        status = "fallback" if failed else "used"
+    return {"provider": requested, "model": model, "status": status}
+
+
+def _sentence_citations(answer: str, chunks: list[Chunk]) -> list[dict]:
+    sentences = _split_answer_for_citations(answer)
+    sources = _sources_from_chunks(chunks)
+    source_index_by_key = {_source_key_from_source(source): index for index, source in enumerate(sources, start=1)}
+    citations: list[dict] = []
+    for sentence in sentences:
+        item = {"sentence": sentence, "grounded": False}
+        source_index, matched_terms = _best_sentence_source(sentence, chunks, source_index_by_key)
+        if source_index is not None:
+            item.update({"grounded": True, "source_index": source_index, "matched_terms": matched_terms})
+        citations.append(item)
+    return citations
+
+
+def _split_answer_for_citations(answer: str) -> list[str]:
+    lines = [line.strip() for line in str(answer or "").splitlines() if line.strip()]
+    sentences: list[str] = []
+    sentence_pattern = re.compile(r"(?<=[.!?])\s+|(?<=\ub2e4\.)\s*")
+    for line in lines:
+        if re.match(r"^\s*[-*]\s+", line):
+            sentences.append(line)
+            continue
+        parts = sentence_pattern.split(line)
+        sentences.extend(part.strip() for part in parts if part.strip())
+    return sentences
+
+
+def _best_sentence_source(sentence: str, chunks: list[Chunk], source_index_by_key: dict[tuple, int]) -> tuple[int | None, list[str]]:
+    terms = _citation_terms(sentence)
+    if not terms:
+        return None, []
+    best_chunk: Chunk | None = None
+    best_hits: list[str] = []
+    best_score = 0
+    for chunk in chunks:
+        chunk_text = chunk.text.lower()
+        chunk_terms = set(_citation_terms(chunk.text))
+        hits = [term for term in terms if term in chunk_terms or term in chunk_text]
+        technical_hits = [term for term in hits if re.search(r"[A-Za-z0-9]", term) or len(term) >= 4]
+        score = len(hits) + len(technical_hits)
+        if score > best_score:
+            best_chunk = chunk
+            best_hits = hits
+            best_score = score
+    if best_chunk is None:
+        return None, []
+    technical_hit = any(re.search(r"[A-Za-z0-9]", term) for term in best_hits)
+    threshold = 1 if technical_hit else 2
+    if len(best_hits) < threshold:
+        return None, []
+    source_index = source_index_by_key.get(_source_key_from_chunk(best_chunk))
+    if source_index is None:
+        return None, []
+    return source_index, best_hits[:8]
+
+
+def _citation_terms(text: str) -> list[str]:
+    stopwords = {
+        "the", "and", "for", "with", "this", "that", "from", "into", "only", "about",
+        "are", "was", "were", "been", "being", "have", "has", "had", "does", "did",
+        "you", "your", "what", "why", "how", "when", "where", "which", "will", "would",
+        "\uc790\ub8cc", "\ub0b4\uc6a9", "\uc124\uba85", "\uc815\ub9ac", "\ubb38\uc7a5", "\ubd80\ubd84",
+        "\uadf8\ub9ac\uace0", "\ud558\uc9c0\ub9cc", "\uadf8\ub798\uc11c", "\ub300\ud55c", "\ud1b5\ud574",
+        "\uc788\uc2b5\ub2c8\ub2e4", "\ud569\ub2c8\ub2e4", "\ub429\ub2c8\ub2e4", "\uac83\uc785\ub2c8\ub2e4",
+    }
+    terms: list[str] = []
+    for token in re.findall(r"[A-Za-z0-9_]+|[\uac00-\ud7a3]+", str(text).lower()):
+        if len(token) < 2 or token in stopwords or token in terms:
+            continue
+        terms.append(token)
+    return terms
+
+def _source_key_from_chunk(chunk: Chunk) -> tuple:
+    metadata = chunk.metadata or {}
+    return (metadata.get("doc_id"), metadata.get("filename"), chunk.page, chunk.chunk_id)
+
+
+def _source_key_from_source(source) -> tuple:
+    return (source.doc_id, source.filename, source.page, source.chunk_id)
+
+def _new_trace() -> dict:
+    return {
+        "request_id": f"req_{uuid4().hex[:8]}",
+        "stages": [],
+        "retrieval_debug": {},
+    }
+
+
+def _trace_stage(trace: dict | None, name: str, started: float) -> None:
+    if trace is None:
+        return
+    trace.setdefault("stages", []).append(
+        {
+            "name": name,
+            "latency_ms": round((time.perf_counter() - started) * 1000, 3),
+        }
+    )
+
+
+def _finish_trace(trace: dict, payload: dict, debug: dict, started: float) -> None:
+    fallback_used = bool(debug.get("fallback_used")) or "fallback" in str(payload.get("retrieval_mode", ""))
+    trace["latency_ms"] = round((time.perf_counter() - started) * 1000, 3)
+    trace["retrieval_debug"] = {
+        "candidate_chunks": debug.get("candidate_chunks", 0),
+        "selected_chunks": debug.get("selected_chunks", len(payload.get("sources", []))),
+        "candidate_graph_edges": debug.get("candidate_graph_edges", 0),
+        "selected_graph_edges": debug.get("selected_graph_edges", len(payload.get("graph_context", []))),
+        "fallback_used": fallback_used,
+        "retrieval_mode": payload.get("retrieval_mode"),
+        "routed_mode": payload.get("routed_mode") or payload.get("mode"),
+    }
 
 
 def summary_for_course_pack(
@@ -199,12 +372,220 @@ def audio_script_for_course_pack(
     return payload
 
 
+def _audio_file_url(pack_id: str, filename: str, output_root: str) -> str:
+    return f"/v2/course-packs/{quote(pack_id, safe='')}/files/{quote(filename, safe='')}?output_root={quote(output_root, safe='')}"
+
+
+def _audio_script_text(script: list[dict]) -> str:
+    lines: list[str] = []
+    for segment in script:
+        text = str(segment.get("text") or segment.get("content") or "").strip()
+        if text:
+            lines.append(text)
+    return "\n\n".join(lines)
+
+
+def _existing_audio_artifact(output_dir: Path) -> Path | None:
+    preferred = output_dir / "audio_overview_edge_tts.mp3"
+    if preferred.exists():
+        return preferred
+    candidates = sorted(output_dir.glob("*edge_tts*.mp3"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def tts_for_course_pack(
+    pack_id: str,
+    query: str = "",
+    output_root: str = "outputs",
+    top_k: int = 4,
+    mode: str = "podcast",
+    llm_provider: str = "mock",
+    llm_model: str | None = None,
+    grounding: str = "creative",
+    target_minutes: int | None = None,
+    target_chars: int | None = None,
+    knowledge_scope: str = "course_pack",
+    voice: str = "ko-KR-SunHiNeural",
+    reuse_existing: bool = False,
+) -> dict:
+    payload = audio_script_for_course_pack(
+        pack_id=pack_id,
+        query=query,
+        output_root=output_root,
+        top_k=top_k,
+        mode=mode,
+        llm_provider=llm_provider,
+        llm_model=llm_model,
+        grounding=grounding,
+        target_minutes=target_minutes,
+        target_chars=target_chars,
+        knowledge_scope=knowledge_scope,
+    )
+    output_dir = course_pack_dir(pack_id, output_root=output_root)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target = output_dir / "audio_overview_edge_tts.mp3"
+    warnings = list(payload.get("warnings", []))
+
+    audio_path: Path | None = target if reuse_existing and target.exists() else None
+    tts_status = "existing_mp3" if audio_path else "pending"
+    script_text = _audio_script_text(payload.get("script", []))
+
+    if audio_path is None and script_text:
+        try:
+            import edge_tts
+
+            async def _save_audio() -> None:
+                communicate = edge_tts.Communicate(script_text, voice)
+                await communicate.save(str(target))
+
+            asyncio.run(_save_audio())
+            audio_path = target
+            tts_status = "edge_tts"
+        except Exception as exc:  # pragma: no cover - network/provider dependent.
+            fallback = _existing_audio_artifact(output_dir)
+            if fallback:
+                audio_path = fallback
+                tts_status = "existing_mp3"
+                warnings.append(f"Edge TTS failed; reused existing mp3 artifact: {exc}")
+            else:
+                tts_status = "failed"
+                warnings.append(f"Edge TTS failed and no existing mp3 artifact was found: {exc}")
+    elif audio_path is None:
+        fallback = _existing_audio_artifact(output_dir)
+        if fallback:
+            audio_path = fallback
+            tts_status = "existing_mp3"
+            warnings.append("No script text was produced; reused an existing mp3 artifact.")
+        else:
+            tts_status = "failed"
+            warnings.append("No script text was produced for TTS.")
+
+    payload["tts_status"] = tts_status
+    payload["audio_path"] = str(audio_path) if audio_path else None
+    payload["artifact_name"] = audio_path.name if audio_path else None
+    payload["audio_url"] = _audio_file_url(pack_id, audio_path.name, output_root) if audio_path else None
+    payload["duration_seconds"] = None
+    payload["warnings"] = warnings
+    if audio_path:
+        _save_pack_artifact(pack_id, output_root, "audio_overview.json", payload)
+    return payload
+
+
 def concept_map_for_course_pack(
     pack_id: str,
     output_root: str = "outputs",
 ) -> dict:
     chunks = load_course_pack_chunks(pack_id, output_root=output_root)
     return build_concept_map(chunks, output_dir=str(course_pack_dir(pack_id, output_root=output_root)))
+
+
+MINDMAP_BRANCHES = [
+    {
+        "id": "tokenization",
+        "label": "Tokenization",
+        "summary": "Input text is stabilized before it enters sequence or pattern models.",
+        "concepts": ["Tokenizer", "subword tokenization", "BPE", "OOV"],
+    },
+    {
+        "id": "sequence_modeling",
+        "label": "Sequence Modeling",
+        "summary": "Models that process token order and contextual flow across a sentence.",
+        "concepts": ["sequence data", "RNN", "LSTM", "long-term dependency"],
+    },
+    {
+        "id": "pattern_extraction",
+        "label": "Pattern Extraction",
+        "summary": "Models that capture local phrases or n-gram-like patterns for downstream tasks.",
+        "concepts": ["CNN", "local pattern", "text classification"],
+    },
+]
+
+MINDMAP_RELATIONS = [
+    ("BPE", "OOV", "reduces"),
+    ("BPE", "subword tokenization", "is_a"),
+    ("subword tokenization", "BPE", "prerequisite_of"),
+    ("RNN", "sequence data", "handles"),
+    ("LSTM", "RNN", "improves"),
+    ("LSTM", "long-term dependency", "handles"),
+    ("CNN", "local pattern", "captures"),
+    ("CNN", "text classification", "used_in"),
+    ("BPE", "NLP pipeline", "used_in"),
+    ("RNN", "NLP pipeline", "used_in"),
+    ("LSTM", "NLP pipeline", "used_in"),
+    ("CNN", "NLP pipeline", "used_in"),
+]
+
+
+def mindmap_view_for_course_pack(
+    pack_id: str,
+    output_root: str = "outputs",
+) -> dict:
+    graph = concept_map_for_course_pack(pack_id=pack_id, output_root=output_root)
+    view = _mindmap_view_from_graph(pack_id=pack_id, graph=graph)
+    _save_pack_artifact(pack_id, output_root, "mindmap_view.json", view)
+    return view
+
+
+def _mindmap_view_from_graph(pack_id: str, graph: dict) -> dict:
+    nodes = graph.get("nodes", [])
+    edges = graph.get("edges", [])
+    node_by_id = {str(node.get("id") or node.get("label")): node for node in nodes}
+    concepts = {node_id for node_id, node in node_by_id.items() if node.get("type") == "concept"}
+
+    branches = []
+    for branch in MINDMAP_BRANCHES:
+        children = []
+        for concept in branch["concepts"]:
+            node = node_by_id.get(concept, {"id": concept, "label": concept, "type": "concept"})
+            children.append(
+                {
+                    "id": concept,
+                    "label": str(node.get("label") or concept),
+                    "present": concept in concepts,
+                    "evidence": _first_mindmap_evidence(concept, edges),
+                }
+            )
+        branches.append({**branch, "children": children})
+
+    relations = []
+    for source, target, fallback_relation in MINDMAP_RELATIONS:
+        relation_edge = _find_mindmap_edge(source, target, edges)
+        relations.append(
+            {
+                "source": source,
+                "target": target,
+                "relation": str(relation_edge.get("relation") or fallback_relation) if relation_edge else fallback_relation,
+                "present": bool(relation_edge) or (source in concepts and target in concepts),
+                "evidence": (relation_edge.get("evidence") or [None])[0] if relation_edge else None,
+            }
+        )
+
+    view = {
+        "pack_id": pack_id,
+        "title": "NLP 11-week Course Mindmap",
+        "root": {"id": "nlp_pipeline", "label": "NLP Pipeline", "summary": "BPE stabilizes input; RNN/LSTM model sequence flow; CNN captures local patterns."},
+        "branches": branches,
+        "relations": relations,
+        "source_graph": {"node_count": len(nodes), "edge_count": len(edges)},
+        "warnings": graph.get("warnings", []),
+    }
+    return view
+
+
+def _find_mindmap_edge(source: str, target: str, edges: list[dict]) -> dict | None:
+    for edge in edges:
+        if str(edge.get("source")) == source and str(edge.get("target")) == target:
+            return edge
+    return None
+
+
+def _first_mindmap_evidence(concept: str, edges: list[dict]) -> dict | None:
+    for edge in edges:
+        if str(edge.get("source")) == concept or str(edge.get("target")) == concept:
+            evidence = edge.get("evidence") or []
+            if evidence:
+                return evidence[0]
+    return None
 
 
 def artifacts_for_course_pack(
@@ -223,6 +604,7 @@ def artifacts_for_course_pack(
         "chunks": "chunks.json",
         "concept_map_mermaid": "concept_map.mmd",
         "concept_map_html": "concept_map.html",
+        "mindmap_view": "mindmap_view.json",
         "hierarchical_summary_index": "hierarchical_summary_index.json",
     }
     artifacts = {
@@ -272,30 +654,69 @@ def select_balanced_course_pack_chunks(pack_id: str, query: str, output_root: st
 
 
 
-def _ask_course_pack_with_vector(pack_id: str, question: str, output_root: str, top_k: int, mode: str = "vector") -> dict:
-    chunks = select_balanced_course_pack_chunks(pack_id, query=question, output_root=output_root, top_k=top_k)
+def _ask_course_pack_with_vector(
+    pack_id: str,
+    question: str,
+    output_root: str,
+    top_k: int,
+    mode: str = "vector",
+    trace: dict | None = None,
+    answer_provider: LLMProvider | None = None,
+    allow_general_fallback: bool = False,
+) -> dict:
+    all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    started = time.perf_counter()
+    chunks = _balanced_chunks(query=question, chunks=all_chunks, top_k=top_k)
+    _trace_stage(trace, "select_vector_chunks", started)
+
+    started = time.perf_counter()
     result = generate_source_grounded_answer(
         query=question,
         chunks=chunks,
         index_provider=_PreselectedIndexProvider(),
-        llm_provider=MockLLMProvider(),
+        llm_provider=answer_provider or MockLLMProvider(),
         top_k=top_k,
+        allow_general_fallback=allow_general_fallback,
     )
+    _trace_stage(trace, "compose_answer", started)
+
     payload = result.to_dict()
+    payload["sentence_citations"] = _sentence_citations(payload.get("answer", ""), chunks)
     payload["mode"] = mode
     payload["retrieval_mode"] = "vector"
+    payload["_retrieval_debug"] = {
+        "candidate_chunks": len(all_chunks),
+        "selected_chunks": len(chunks),
+        "fallback_used": False,
+    }
     return payload
 
 
-def _ask_course_pack_with_router(pack_id: str, question: str, output_root: str, top_k: int) -> dict:
-    route = classify_course_pack_question(question)
+def _ask_course_pack_with_router(
+    pack_id: str,
+    question: str,
+    output_root: str,
+    top_k: int,
+    route: dict | None = None,
+    trace: dict | None = None,
+    answer_provider: LLMProvider | None = None,
+    allow_general_fallback: bool = False,
+) -> dict:
+    if route is None:
+        started = time.perf_counter()
+        route = classify_course_pack_question(question)
+        _trace_stage(trace, "classify_question", started)
+
+    started = time.perf_counter()
     selected_mode = route["selected_mode"]
+    _trace_stage(trace, "route_decision", started)
+
     if selected_mode == "local_graph":
-        payload = _ask_course_pack_with_graph(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+        payload = _ask_course_pack_with_graph(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, trace=trace, answer_provider=answer_provider, allow_general_fallback=allow_general_fallback)
     elif selected_mode == "hierarchical":
-        payload = _ask_course_pack_with_hierarchical_summary(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+        payload = _ask_course_pack_with_hierarchical_summary(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, trace=trace, answer_provider=answer_provider, allow_general_fallback=allow_general_fallback)
     else:
-        payload = _ask_course_pack_with_vector(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k)
+        payload = _ask_course_pack_with_vector(pack_id=pack_id, question=question, output_root=output_root, top_k=top_k, trace=trace, answer_provider=answer_provider, allow_general_fallback=allow_general_fallback)
 
     payload["mode"] = "auto"
     payload["routed_mode"] = selected_mode
@@ -309,19 +730,34 @@ def _ask_course_pack_with_router(pack_id: str, question: str, output_root: str, 
         ]
     return payload
 
-def _ask_course_pack_with_hierarchical_summary(pack_id: str, question: str, output_root: str, top_k: int) -> dict:
+def _ask_course_pack_with_hierarchical_summary(
+    pack_id: str,
+    question: str,
+    output_root: str,
+    top_k: int,
+    trace: dict | None = None,
+    answer_provider: LLMProvider | None = None,
+    allow_general_fallback: bool = False,
+) -> dict:
     all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+    started = time.perf_counter()
     retrieval = retrieve_hierarchical_summary(query=question, chunks=all_chunks, pack_id=pack_id, top_k=top_k)
+    _trace_stage(trace, "retrieve_hierarchical_summary", started)
     chunks = retrieval.pop("chunks")
 
+    started = time.perf_counter()
     result = generate_source_grounded_answer(
         query=question,
         chunks=chunks,
         index_provider=_PreselectedIndexProvider(),
-        llm_provider=MockLLMProvider(),
+        llm_provider=answer_provider or MockLLMProvider(),
         top_k=top_k,
+        allow_general_fallback=allow_general_fallback,
     )
+    _trace_stage(trace, "compose_answer", started)
+
     payload = result.to_dict()
+    payload["sentence_citations"] = _sentence_citations(payload.get("answer", ""), chunks)
     payload["mode"] = "hierarchical"
     payload["retrieval_mode"] = "hierarchical_summary"
     payload["abstraction_level"] = retrieval["abstraction_level"]
@@ -330,6 +766,11 @@ def _ask_course_pack_with_hierarchical_summary(pack_id: str, question: str, outp
     payload["hierarchical_summary_index"] = {
         "root_id": retrieval["hierarchical_summary_index"].get("root_id"),
         "node_count": len(retrieval["hierarchical_summary_index"].get("nodes", [])),
+    }
+    payload["_retrieval_debug"] = {
+        "candidate_chunks": len(all_chunks),
+        "selected_chunks": len(chunks),
+        "fallback_used": False,
     }
     return payload
 
@@ -356,30 +797,54 @@ CONTRAST_RELATIONS = {"contrasts"}
 STRUCTURAL_RELATIONS = {"contains", "mentions", "evidence_in", "appears_in", "introduces"}
 
 
-def _ask_course_pack_with_graph(pack_id: str, question: str, output_root: str, top_k: int) -> dict:
+def _ask_course_pack_with_graph(
+    pack_id: str,
+    question: str,
+    output_root: str,
+    top_k: int,
+    trace: dict | None = None,
+    answer_provider: LLMProvider | None = None,
+    allow_general_fallback: bool = False,
+) -> dict:
     all_chunks = load_course_pack_chunks(pack_id, output_root=output_root)
+
+    started = time.perf_counter()
     graph = _load_or_build_course_pack_graph(pack_id, output_root=output_root, chunks=all_chunks)
+    _trace_stage(trace, "load_course_graph", started)
+
+    started = time.perf_counter()
     graph_selection = _select_course_graph_context(question, graph)
     graph_edges = graph_selection["graph_context"]
+    _trace_stage(trace, "retrieve_graph_context", started)
+
+    started = time.perf_counter()
     graph_chunks = _chunks_from_graph_edges(graph_edges, all_chunks)
     warnings: list[str] = []
     retrieval_mode = "course_graph_path" if graph_selection["graph_paths"] else "local_graph"
 
     if graph_chunks:
         chunks = _dedupe_chunks(graph_chunks)[:top_k]
+        fallback_used = False
     else:
         retrieval_mode = "local_graph_fallback_vector"
+        fallback_used = True
         warnings.append("No matching course graph evidence was found. Falling back to balanced vector retrieval.")
         chunks = _balanced_chunks(query=question, chunks=all_chunks, top_k=top_k)
+    _trace_stage(trace, "select_evidence_chunks", started)
 
+    started = time.perf_counter()
     result = generate_source_grounded_answer(
         query=question,
         chunks=chunks,
         index_provider=_PreselectedIndexProvider(),
-        llm_provider=MockLLMProvider(),
+        llm_provider=answer_provider or MockLLMProvider(),
         top_k=top_k,
+        allow_general_fallback=allow_general_fallback,
     )
+    _trace_stage(trace, "compose_answer", started)
+
     payload = result.to_dict()
+    payload["sentence_citations"] = _sentence_citations(payload.get("answer", ""), chunks)
     payload["mode"] = "local_graph"
     payload["retrieval_mode"] = retrieval_mode
     payload["graph_context"] = graph_edges
@@ -388,6 +853,13 @@ def _ask_course_pack_with_graph(pack_id: str, question: str, output_root: str, t
     payload["graph_paths"] = graph_selection["graph_paths"]
     payload["evidence_chunks"] = [source_ref.to_dict() for source_ref in _sources_from_chunks(chunks)]
     payload["warnings"] = [*payload.get("warnings", []), *warnings]
+    payload["_retrieval_debug"] = {
+        "candidate_chunks": len(all_chunks),
+        "selected_chunks": len(chunks),
+        "candidate_graph_edges": len(graph.get("edges", [])),
+        "selected_graph_edges": len(graph_edges),
+        "fallback_used": fallback_used,
+    }
     return payload
 
 

@@ -1,12 +1,15 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+from pathlib import Path
 
 try:
     from fastapi import APIRouter, HTTPException
+    from fastapi.responses import FileResponse
 except ImportError:  # Keeps the scaffold importable without FastAPI installed.
     APIRouter = None  # type: ignore[assignment]
     HTTPException = None  # type: ignore[assignment]
+    FileResponse = None  # type: ignore[assignment]
 
 from v2.api.schemas import (
     AnswerResponse,
@@ -20,6 +23,8 @@ from v2.api.schemas import (
     CoursePackArtifactsResponse,
     CoursePackConceptMapRequest,
     CoursePackIngestRequest,
+    CoursePackJobRequest,
+    CoursePackJobResponse,
     CoursePackQueryRequest,
     CoursePackResponse,
     CoursePackStudyKitRequest,
@@ -31,6 +36,7 @@ from v2.api.schemas import (
     StudyKitRequest,
 )
 from v2.audio_script import generate_audio_script
+from v2.course_pack_jobs import create_course_pack_job as create_course_pack_job_service, load_course_pack_job
 from v2.course_packs import (
     ask_course_pack as ask_course_pack_service,
     audio_script_for_course_pack,
@@ -40,8 +46,10 @@ from v2.course_packs import (
     course_pack_dir,
     create_course_pack,
     load_course_pack,
+    mindmap_view_for_course_pack,
     study_kit_for_course_pack,
     summary_for_course_pack,
+    tts_for_course_pack,
 )
 from v2.documents import chunks_from_payload_or_doc, document_dir, load_document
 from v2.graph.concept_map import build_concept_map
@@ -180,6 +188,25 @@ def ingest_course_pack(request: CoursePackIngestRequest) -> dict:
     )
 
 
+def create_course_pack_job(request: CoursePackJobRequest) -> dict:
+    payload = _payload(request)
+    return create_course_pack_job_service(
+        paths=payload.get("paths", []),
+        output_root=payload.get("output_root", "outputs"),
+        max_chunk_chars=payload.get("max_chunk_chars", 900),
+        pack_id=payload.get("pack_id"),
+    )
+
+
+def get_course_pack_job(job_id: str, output_root: str = "outputs") -> dict:
+    job = load_course_pack_job(job_id, output_root=output_root)
+    if job.get("status") == "not_found":
+        if HTTPException is not None:
+            raise HTTPException(status_code=404, detail={"error": "course_pack_job_not_found", "job_id": job_id})
+        raise FileNotFoundError(f"course pack job not found: {job_id}")
+    return job
+
+
 def get_course_pack(pack_id: str, output_root: str = "outputs") -> dict:
     return _ensure_course_pack(pack_id, output_root=output_root)
 
@@ -198,6 +225,9 @@ def ask_course_pack(request: CoursePackQueryRequest) -> dict:
         output_root=payload.get("output_root", "outputs"),
         top_k=payload.get("top_k", 4),
         mode=payload.get("mode", "vector"),
+        llm_provider=payload.get("llm_provider", "mock"),
+        llm_model=payload.get("llm_model"),
+        allow_general_fallback=payload.get("allow_general_fallback", False),
     )
 
 
@@ -245,6 +275,43 @@ def audio_script_course_pack(request: CoursePackAudioScriptRequest) -> dict:
     )
 
 
+def tts_course_pack(request: CoursePackAudioScriptRequest) -> dict:
+    payload = _payload(request)
+    _ensure_course_pack(payload["pack_id"], output_root=payload.get("output_root", "outputs"))
+    return tts_for_course_pack(
+        pack_id=payload["pack_id"],
+        query=_query(payload),
+        output_root=payload.get("output_root", "outputs"),
+        top_k=payload.get("top_k", 4),
+        mode=payload.get("mode", "podcast"),
+        llm_provider=payload.get("llm_provider", "mock"),
+        llm_model=payload.get("llm_model"),
+        grounding=payload.get("grounding", "creative"),
+        target_minutes=payload.get("target_minutes"),
+        target_chars=payload.get("target_chars"),
+        knowledge_scope=payload.get("knowledge_scope", "course_pack"),
+        voice=payload.get("voice", "ko-KR-SunHiNeural"),
+        reuse_existing=payload.get("reuse_existing", False),
+    )
+
+
+def get_course_pack_file(pack_id: str, name: str, output_root: str = "outputs"):
+    _ensure_course_pack(pack_id, output_root=output_root)
+    base = course_pack_dir(pack_id, output_root=output_root).resolve()
+    target = (base / name).resolve()
+    if target != base and base not in target.parents:
+        if HTTPException is not None:
+            raise HTTPException(status_code=400, detail={"error": "invalid_artifact_path", "name": name})
+        raise ValueError(f"invalid artifact path: {name}")
+    if not target.exists() or target.is_dir():
+        if HTTPException is not None:
+            raise HTTPException(status_code=404, detail={"error": "artifact_not_found", "name": name})
+        raise FileNotFoundError(f"artifact not found: {name}")
+    if FileResponse is None:
+        return {"path": str(target)}
+    return FileResponse(target)
+
+
 def export_concept_map_course_pack(request: CoursePackConceptMapExportRequest) -> dict:
     payload = _payload(request)
     _ensure_course_pack(payload["pack_id"], output_root=payload.get("output_root", "outputs"))
@@ -262,6 +329,12 @@ def concept_map_course_pack(request: CoursePackConceptMapRequest) -> dict:
     return concept_map_for_course_pack(pack_id=payload["pack_id"], output_root=payload.get("output_root", "outputs"))
 
 
+def mindmap_course_pack(request: CoursePackConceptMapRequest) -> dict:
+    payload = _payload(request)
+    _ensure_course_pack(payload["pack_id"], output_root=payload.get("output_root", "outputs"))
+    return mindmap_view_for_course_pack(pack_id=payload["pack_id"], output_root=payload.get("output_root", "outputs"))
+
+
 def ingest_alias(request: IngestRequest) -> dict:
     return ingest_document(request)
 
@@ -274,13 +347,18 @@ if router:
     router.post("/documents/ingest", response_model=DocumentResponse)(ingest_document)
     router.get("/documents/{doc_id}", response_model=DocumentResponse)(get_document)
     router.post("/course-packs", response_model=CoursePackResponse)(ingest_course_pack)
+    router.post("/course-packs/jobs", response_model=CoursePackJobResponse)(create_course_pack_job)
+    router.get("/course-packs/jobs/{job_id}", response_model=CoursePackJobResponse)(get_course_pack_job)
     router.get("/course-packs/{pack_id}", response_model=CoursePackResponse)(get_course_pack)
     router.get("/course-packs/{pack_id}/artifacts", response_model=CoursePackArtifactsResponse)(get_course_pack_artifacts)
     router.post("/course-packs/ask", response_model=AnswerResponse)(ask_course_pack)
     router.post("/course-packs/study-kit")(study_kit_course_pack)
     router.post("/course-packs/summary", response_model=CoursePackSummaryResponse)(summary_course_pack)
     router.post("/course-packs/audio-script", response_model=AudioScriptResponse)(audio_script_course_pack)
+    router.post("/course-packs/tts", response_model=AudioScriptResponse)(tts_course_pack)
+    router.get("/course-packs/{pack_id}/files/{name}")(get_course_pack_file)
     router.post("/course-packs/concept-map", response_model=ConceptMapResponse)(concept_map_course_pack)
+    router.post("/course-packs/mindmap")(mindmap_course_pack)
     router.post("/course-packs/concept-map/export", response_model=CoursePackConceptMapExportResponse)(export_concept_map_course_pack)
     router.post("/ask", response_model=AnswerResponse)(ask)
     router.post("/study-kit")(study_kit)

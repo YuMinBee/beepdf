@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Literal
 
@@ -65,6 +65,9 @@ class AnswerResponse(BaseModel):
     question_type: str | None = None
     retrieval_plan: list[dict[str, Any]] = Field(default_factory=list)
     selected_retrievers: list[str] = Field(default_factory=list)
+    sentence_citations: list[dict[str, Any]] = Field(default_factory=list)
+    llm: dict[str, Any] = Field(default_factory=dict)
+    trace: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 class StudyKitRequest(QueryRequest):
@@ -86,6 +89,9 @@ class AudioScriptResponse(BaseModel):
     script: list[dict[str, Any]] = Field(default_factory=list)
     tts_status: str = "mock"
     audio_path: str | None = None
+    audio_url: str | None = None
+    duration_seconds: float | None = None
+    artifact_name: str | None = None
     llm: dict[str, Any] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
@@ -107,6 +113,25 @@ class CoursePackIngestRequest(BaseModel):
     pack_id: str | None = None
 
 
+class CoursePackJobRequest(CoursePackIngestRequest):
+    pass
+
+
+class CoursePackJobResponse(BaseModel):
+    job_id: str
+    status: str
+    stage: str
+    progress: float = 0.0
+    processed_documents: int = 0
+    total_documents: int = 0
+    pack_id: str | None = None
+    course_pack: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    error: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
 class CoursePackResponse(BaseModel):
     pack_id: str
     document_count: int | None = None
@@ -123,6 +148,9 @@ class CoursePackQueryRequest(BaseModel):
     top_k: int = 4
     output_root: str = "outputs"
     mode: str = "vector"
+    llm_provider: str = "mock"
+    llm_model: str | None = None
+    allow_general_fallback: bool = False
 
 
 class CoursePackStudyKitRequest(CoursePackQueryRequest):
@@ -156,6 +184,8 @@ class CoursePackAudioScriptRequest(CoursePackQueryRequest):
     target_minutes: int | None = None
     target_chars: int | None = None
     knowledge_scope: str = "course_pack"
+    voice: str = "ko-KR-SunHiNeural"
+    reuse_existing: bool = False
 
 
 class CoursePackArtifactsResponse(BaseModel):

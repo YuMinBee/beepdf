@@ -26,3 +26,6 @@ pytesseract>=0.3.13
 
 # Optional OpenAIProvider uses the standard library HTTP client; no OpenAI SDK is required.
 
+
+# Optional local demo TTS for CourseBee audio overview artifacts.
+edge-tts>=7.0
